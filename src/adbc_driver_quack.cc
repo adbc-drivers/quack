@@ -7,6 +7,7 @@
 #include <arrow-adbc/adbc.h>
 #include <duckdb.h>
 
+#include "duckdb_arrow_stream.h"
 #include "quack_uri.h"
 #include "sql_escape.h"
 
@@ -408,11 +409,16 @@ AdbcStatusCode AdbcStatementExecuteQuery(AdbcStatement* statement,
   if (state->sql.empty()) {
     return InvalidState(error, "SQL query is not set");
   }
+  const std::string remote_sql = adbc_driver_quack::BuildRemoteQuerySql(state->sql);
   if (out != nullptr) {
-    return NotImplemented(error, "Arrow result streams are not implemented");
+    const auto result = adbc_driver_quack::ExecuteDuckDbArrowQuery(
+        state->connection->connection, remote_sql, out, rows_affected);
+    if (result.status != ADBC_STATUS_OK) {
+      return SetError(error, result.status, result.message, result.vendor_code);
+    }
+    return Ok(error);
   }
 
-  const std::string remote_sql = adbc_driver_quack::BuildRemoteQuerySql(state->sql);
   const AdbcStatusCode status = RunDuckDbQuery(state->connection, remote_sql, error);
   if (status == ADBC_STATUS_OK && rows_affected != nullptr) {
     *rows_affected = -1;

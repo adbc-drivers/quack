@@ -1,14 +1,17 @@
 add_library(adbc_driver_quack_helpers STATIC
+  duckdb_arrow_stream.cc
   quack_uri.cc
   sql_escape.cc)
 
 target_include_directories(adbc_driver_quack_helpers
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/arrow-adbc/include)
+    ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/arrow-adbc/include
+    ${ADBC_DRIVER_QUACK_DUCKDB_INCLUDE_DIR})
 
 target_link_libraries(adbc_driver_quack_helpers
   PUBLIC
+    duckdb
     uriparser)
 
 set_target_properties(adbc_driver_quack_helpers PROPERTIES

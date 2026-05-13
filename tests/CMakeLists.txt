@@ -13,6 +13,7 @@ FetchContent_MakeAvailable(googletest)
 add_executable(adbc_driver_quack_tests
   quack_uri_test.cc
   sql_escape_test.cc
+  duckdb_arrow_stream_test.cc
   adbc_driver_test.cc
   exported_symbols_test.cc)
 
