@@ -318,13 +318,7 @@ AdbcStatusCode AdbcConnectionInit(AdbcConnection* connection, AdbcDatabase* data
     return IoError(error, "failed to connect local DuckDB client");
   }
 
-  const std::string install = "INSTALL quack";
-  AdbcStatusCode status = RunDuckDbQuery(connection_state, install, error);
-  if (status != ADBC_STATUS_OK) {
-    CloseConnectionState(connection_state);
-    return status;
-  }
-  status = RunDuckDbQuery(connection_state, "LOAD quack", error);
+  AdbcStatusCode status = RunDuckDbQuery(connection_state, "LOAD quack", error);
   if (status != ADBC_STATUS_OK) {
     CloseConnectionState(connection_state);
     return status;
