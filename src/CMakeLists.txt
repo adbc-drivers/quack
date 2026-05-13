@@ -11,6 +11,10 @@ target_link_libraries(adbc_driver_quack_helpers
   PUBLIC
     uriparser)
 
+set_target_properties(adbc_driver_quack_helpers PROPERTIES
+  CXX_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN YES)
+
 add_library(adbc_driver_quack SHARED
   adbc_driver_quack.cc)
 
