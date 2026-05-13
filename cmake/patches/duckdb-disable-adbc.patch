@@ -1,0 +1,12 @@
+diff --git a/src/common/CMakeLists.txt b/src/common/CMakeLists.txt
+index 33dfcb34c9..0df8cb194f 100644
+--- a/src/common/CMakeLists.txt
++++ b/src/common/CMakeLists.txt
+@@ -1,7 +1,3 @@
+-if(NOT CLANG_TIDY)
+-  add_subdirectory(adbc)
+-endif()
+-
+ add_subdirectory(arrow)
+ add_subdirectory(crypto)
+ add_subdirectory(enums)
