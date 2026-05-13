@@ -13,8 +13,35 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <new>
 #include <string>
 #include <utility>
+
+extern "C" {
+AdbcStatusCode AdbcDatabaseInit(AdbcDatabase* database, AdbcError* error);
+AdbcStatusCode AdbcDatabaseNew(AdbcDatabase* database, AdbcError* error);
+AdbcStatusCode AdbcDatabaseSetOption(AdbcDatabase* database, const char* key,
+                                     const char* value, AdbcError* error);
+AdbcStatusCode AdbcDatabaseRelease(AdbcDatabase* database, AdbcError* error);
+AdbcStatusCode AdbcConnectionInit(AdbcConnection* connection, AdbcDatabase* database,
+                                  AdbcError* error);
+AdbcStatusCode AdbcConnectionNew(AdbcConnection* connection, AdbcError* error);
+AdbcStatusCode AdbcConnectionRelease(AdbcConnection* connection, AdbcError* error);
+AdbcStatusCode AdbcStatementBind(AdbcStatement* statement, ArrowArray* values,
+                                 ArrowSchema* schema, AdbcError* error);
+AdbcStatusCode AdbcStatementBindStream(AdbcStatement* statement,
+                                       ArrowArrayStream* stream, AdbcError* error);
+AdbcStatusCode AdbcStatementExecuteQuery(AdbcStatement* statement,
+                                         ArrowArrayStream* out,
+                                         int64_t* rows_affected,
+                                         AdbcError* error);
+AdbcStatusCode AdbcStatementNew(AdbcConnection* connection, AdbcStatement* statement,
+                                AdbcError* error);
+AdbcStatusCode AdbcStatementPrepare(AdbcStatement* statement, AdbcError* error);
+AdbcStatusCode AdbcStatementRelease(AdbcStatement* statement, AdbcError* error);
+AdbcStatusCode AdbcStatementSetSqlQuery(AdbcStatement* statement, const char* query,
+                                        AdbcError* error);
+}
 
 namespace {
 
@@ -33,6 +60,10 @@ struct ConnectionState {
 struct StatementState {
   ConnectionState* connection = nullptr;
   std::string sql;
+};
+
+struct DriverState {
+  int version = ADBC_VERSION_1_1_0;
 };
 
 void ReleaseError(AdbcError* error) {
@@ -104,6 +135,16 @@ AdbcStatusCode IoError(AdbcError* error, std::string message, int32_t vendor_cod
   return SetError(error, ADBC_STATUS_IO, std::move(message), vendor_code);
 }
 
+AdbcStatusCode ReleaseDriver(AdbcDriver* driver, AdbcError* error) {
+  if (driver == nullptr) {
+    return Ok(error);
+  }
+  delete static_cast<DriverState*>(driver->private_data);
+  driver->private_data = nullptr;
+  driver->release = nullptr;
+  return Ok(error);
+}
+
 DatabaseState* GetDatabase(AdbcDatabase* database) {
   if (database == nullptr) {
     return nullptr;
@@ -151,6 +192,42 @@ AdbcStatusCode RunDuckDbQuery(ConnectionState* state, const std::string& sql,
     return IoError(error, std::move(message), error_type);
   }
   duckdb_destroy_result(&result);
+  return Ok(error);
+}
+
+AdbcStatusCode InitDriver(int version, void* raw_driver, AdbcError* error) {
+  if (raw_driver == nullptr) {
+    return InvalidArgument(error, "driver must not be null");
+  }
+  if (version != ADBC_VERSION_1_0_0 && version != ADBC_VERSION_1_1_0) {
+    return NotImplemented(error, "unsupported ADBC driver version");
+  }
+
+  auto* driver = static_cast<AdbcDriver*>(raw_driver);
+  auto* driver_state = new (std::nothrow) DriverState{version};
+  if (driver_state == nullptr) {
+    return SetError(error, ADBC_STATUS_UNKNOWN, "failed to allocate driver state");
+  }
+  driver->private_data = driver_state;
+  driver->release = ReleaseDriver;
+
+  driver->DatabaseInit = AdbcDatabaseInit;
+  driver->DatabaseNew = AdbcDatabaseNew;
+  driver->DatabaseSetOption = AdbcDatabaseSetOption;
+  driver->DatabaseRelease = AdbcDatabaseRelease;
+
+  driver->ConnectionInit = AdbcConnectionInit;
+  driver->ConnectionNew = AdbcConnectionNew;
+  driver->ConnectionRelease = AdbcConnectionRelease;
+
+  driver->StatementBind = AdbcStatementBind;
+  driver->StatementBindStream = AdbcStatementBindStream;
+  driver->StatementExecuteQuery = AdbcStatementExecuteQuery;
+  driver->StatementNew = AdbcStatementNew;
+  driver->StatementPrepare = AdbcStatementPrepare;
+  driver->StatementRelease = AdbcStatementRelease;
+  driver->StatementSetSqlQuery = AdbcStatementSetSqlQuery;
+
   return Ok(error);
 }
 
@@ -365,6 +442,16 @@ AdbcStatusCode AdbcStatementRelease(AdbcStatement* statement, AdbcError* error) 
   statement->private_data = nullptr;
   statement->private_driver = nullptr;
   return Ok(error);
+}
+
+ADBC_EXPORT AdbcStatusCode AdbcDriverInit(int version, void* driver,
+                                          AdbcError* error) {
+  return InitDriver(version, driver, error);
+}
+
+ADBC_EXPORT AdbcStatusCode AdbcDriverQuackInit(int version, void* driver,
+                                               AdbcError* error) {
+  return InitDriver(version, driver, error);
 }
 
 }  // extern "C"
