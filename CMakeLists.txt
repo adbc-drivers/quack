@@ -20,6 +20,20 @@ project(
   DESCRIPTION "ADBC driver for remote DuckDB via Quack"
   LANGUAGES C CXX)
 
+set(ADBC_DRIVER_QUACK_DUCKDB_VERSION
+    "1.5.2"
+    CACHE STRING "DuckDB version used by the Quack driver")
+set(ADBC_DRIVER_QUACK_DUCKDB_TAG "v${ADBC_DRIVER_QUACK_DUCKDB_VERSION}")
+set(ADBC_DRIVER_QUACK_NANOARROW_VERSION
+    "0.8.0"
+    CACHE STRING "Apache Arrow nanoarrow version used by the Quack driver")
+set(ADBC_DRIVER_QUACK_NANOARROW_TAG
+    "apache-arrow-nanoarrow-${ADBC_DRIVER_QUACK_NANOARROW_VERSION}")
+
+configure_file(
+  ${CMAKE_CURRENT_LIST_DIR}/src/adbc_driver_quack_config.h.in
+  ${CMAKE_CURRENT_BINARY_DIR}/generated/adbc_driver_quack_config.h @ONLY)
+
 include(FetchContent)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -46,10 +60,29 @@ endif()
 find_package(OpenSSL REQUIRED GLOBAL)
 find_package(CURL REQUIRED GLOBAL)
 
+set(NANOARROW_NAMESPACE
+    "AdbcDriverQuack"
+    CACHE STRING "Prefix for nanoarrow symbols embedded in the Quack driver")
+set(NANOARROW_BUILD_APPS
+    OFF
+    CACHE BOOL "" FORCE)
+set(NANOARROW_BUILD_TESTS
+    OFF
+    CACHE BOOL "" FORCE)
+set(NANOARROW_BUILD_BENCHMARKS
+    OFF
+    CACHE BOOL "" FORCE)
+set(NANOARROW_BUILD_INTEGRATION_TESTS
+    OFF
+    CACHE BOOL "" FORCE)
+set(NANOARROW_INSTALL_SHARED
+    OFF
+    CACHE BOOL "" FORCE)
+
 FetchContent_Declare(
   duckdb
   GIT_REPOSITORY https://github.com/duckdb/duckdb.git
-  GIT_TAG v1.5.2
+  GIT_TAG ${ADBC_DRIVER_QUACK_DUCKDB_TAG}
   PATCH_COMMAND
     ${CMAKE_COMMAND} -E chdir <SOURCE_DIR> git apply --ignore-whitespace
     ${CMAKE_CURRENT_LIST_DIR}/cmake/patches/duckdb-disable-adbc.patch COMMAND
@@ -71,6 +104,11 @@ FetchContent_Declare(
   uriparser
   GIT_REPOSITORY https://github.com/uriparser/uriparser.git
   GIT_TAG uriparser-0.9.8)
+
+FetchContent_Declare(
+  nanoarrow
+  GIT_REPOSITORY https://github.com/apache/arrow-nanoarrow.git
+  GIT_TAG ${ADBC_DRIVER_QUACK_NANOARROW_TAG})
 
 set(URIPARSER_BUILD_DOCS
     OFF
@@ -109,7 +147,7 @@ set(DUCKDB_EXTENSION_CONFIGS
     "${CMAKE_CURRENT_LIST_DIR}/cmake/duckdb/quack_extension_config.cmake"
     CACHE STRING "" FORCE)
 
-FetchContent_MakeAvailable(adbc_driver_quack_quack duckdb uriparser)
+FetchContent_MakeAvailable(adbc_driver_quack_quack duckdb nanoarrow uriparser)
 
 set(ADBC_DRIVER_QUACK_DUCKDB_INCLUDE_DIR "${duckdb_SOURCE_DIR}/src/include")
 

@@ -62,14 +62,15 @@ TEST(ExportedSymbolsTest, ExportsRequiredAdbcEntryPoints) {
   ASSERT_NE(library, nullptr);
 
   char const* symbols[] = {
-      "AdbcDatabaseNew",          "AdbcDatabaseSetOption",
-      "AdbcDatabaseInit",         "AdbcDatabaseRelease",
-      "AdbcConnectionNew",        "AdbcConnectionInit",
-      "AdbcConnectionRelease",    "AdbcStatementNew",
-      "AdbcStatementSetSqlQuery", "AdbcStatementExecuteQuery",
-      "AdbcStatementPrepare",     "AdbcStatementBind",
-      "AdbcStatementBindStream",  "AdbcStatementRelease",
-      "AdbcDriverInit",           "AdbcDriverQuackInit",
+      "AdbcDatabaseNew",           "AdbcDatabaseSetOption",
+      "AdbcDatabaseInit",          "AdbcDatabaseRelease",
+      "AdbcConnectionNew",         "AdbcConnectionInit",
+      "AdbcConnectionGetInfo",     "AdbcConnectionRelease",
+      "AdbcStatementNew",          "AdbcStatementSetSqlQuery",
+      "AdbcStatementExecuteQuery", "AdbcStatementPrepare",
+      "AdbcStatementBind",         "AdbcStatementBindStream",
+      "AdbcStatementRelease",      "AdbcDriverInit",
+      "AdbcDriverQuackInit",
   };
 
   for (char const* symbol : symbols) {
@@ -103,6 +104,7 @@ TEST(ExportedSymbolsTest, DriverInitFunctionsPopulateDriverTable) {
     EXPECT_NE(driver.DatabaseRelease, nullptr) << init_symbol;
     EXPECT_NE(driver.ConnectionNew, nullptr) << init_symbol;
     EXPECT_NE(driver.ConnectionInit, nullptr) << init_symbol;
+    EXPECT_NE(driver.ConnectionGetInfo, nullptr) << init_symbol;
     EXPECT_NE(driver.ConnectionRelease, nullptr) << init_symbol;
     EXPECT_NE(driver.StatementNew, nullptr) << init_symbol;
     EXPECT_NE(driver.StatementSetSqlQuery, nullptr) << init_symbol;
@@ -137,7 +139,6 @@ TEST(ExportedSymbolsTest, DriverInitFunctionsClearUnsupportedCallbacks) {
         << init_symbol;
 
     EXPECT_EQ(driver.DatabaseSetOptionInt, nullptr) << init_symbol;
-    EXPECT_EQ(driver.ConnectionGetInfo, nullptr) << init_symbol;
     EXPECT_EQ(driver.StatementExecuteSchema, nullptr) << init_symbol;
 
     EXPECT_EQ(driver.release(&driver, &error), ADBC_STATUS_OK) << init_symbol;

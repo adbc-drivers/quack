@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import adbc_drivers_validation.tests.connection as connection_tests
-import pytest
 
 from .quack import get_quirks
 
@@ -24,10 +23,4 @@ def pytest_generate_tests(metafunc) -> None:
 
 
 class TestConnection(connection_tests.TestConnection):
-    @pytest.mark.skip(reason="GetInfo is not implemented")
-    def test_get_info(self, driver, conn, record_property) -> None:
-        super().test_get_info(driver, conn, record_property)
-
-    @pytest.mark.skip(reason="GetInfo is not implemented")
-    def test_get_info_arrow_version(self, driver, conn) -> None:
-        super().test_get_info_arrow_version(driver, conn)
+    pass

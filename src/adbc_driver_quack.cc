@@ -29,6 +29,7 @@
 #include <utility>
 
 #include "duckdb_arrow_stream.h"
+#include "get_info_stream.h"
 #include "quack_uri.h"
 #include "sql_escape.h"
 
@@ -40,6 +41,10 @@ AdbcStatusCode DriverDatabaseSetOption(AdbcDatabase* database, char const* key,
 AdbcStatusCode DriverDatabaseRelease(AdbcDatabase* database, AdbcError* error);
 AdbcStatusCode DriverConnectionInit(AdbcConnection* connection,
                                     AdbcDatabase* database, AdbcError* error);
+AdbcStatusCode DriverConnectionGetInfo(AdbcConnection* connection,
+                                       uint32_t const* info_codes,
+                                       size_t info_codes_length,
+                                       ArrowArrayStream* out, AdbcError* error);
 AdbcStatusCode DriverConnectionNew(AdbcConnection* connection,
                                    AdbcError* error);
 AdbcStatusCode DriverConnectionRelease(AdbcConnection* connection,
@@ -150,6 +155,10 @@ AdbcStatusCode InvalidArgument(AdbcError* error, std::string message) {
   return SetError(error, ADBC_STATUS_INVALID_ARGUMENT, std::move(message));
 }
 
+AdbcStatusCode InvalidData(AdbcError* error, std::string message) {
+  return SetError(error, ADBC_STATUS_INVALID_DATA, std::move(message));
+}
+
 AdbcStatusCode InvalidState(AdbcError* error, std::string message) {
   return SetError(error, ADBC_STATUS_INVALID_STATE, std::move(message));
 }
@@ -225,6 +234,47 @@ AdbcStatusCode RunDuckDbQuery(ConnectionState* state, std::string const& sql,
   return Ok(error);
 }
 
+AdbcStatusCode QueryRemoteVendorVersion(ConnectionState* state,
+                                        std::string* remote_vendor_version,
+                                        AdbcError* error) {
+  duckdb_result result;
+  std::string const sql =
+      adbc_driver_quack::BuildRemoteQuerySql("SELECT version()");
+  duckdb_state const query_state =
+      duckdb_query(state->connection, sql.c_str(), &result);
+  if (query_state == DuckDBError) {
+    char const* result_error = duckdb_result_error(&result);
+    std::string message =
+        result_error != nullptr ? result_error : "DuckDB query failed";
+    auto const error_type =
+        static_cast<int32_t>(duckdb_result_error_type(&result));
+    duckdb_destroy_result(&result);
+    return IoError(error, std::move(message), error_type);
+  }
+
+  if (duckdb_column_count(&result) != 1 || duckdb_row_count(&result) != 1 ||
+      duckdb_column_type(&result, 0) != DUCKDB_TYPE_VARCHAR ||
+      duckdb_value_is_null(&result, 0, 0)) {
+    duckdb_destroy_result(&result);
+    return InvalidData(error,
+                       "remote DuckDB version query did not return one string "
+                       "value");
+  }
+
+  char* value = duckdb_value_varchar(&result, 0, 0);
+  if (value == nullptr) {
+    duckdb_destroy_result(&result);
+    return InvalidData(error,
+                       "remote DuckDB version query did not return one string "
+                       "value");
+  }
+
+  *remote_vendor_version = value;
+  duckdb_free(value);
+  duckdb_destroy_result(&result);
+  return Ok(error);
+}
+
 AdbcStatusCode InitDriver(int version, void* raw_driver, AdbcError* error) {
   if (raw_driver == nullptr) {
     return InvalidArgument(error, "driver must not be null");
@@ -254,6 +304,7 @@ AdbcStatusCode InitDriver(int version, void* raw_driver, AdbcError* error) {
   driver->DatabaseRelease = DriverDatabaseRelease;
 
   driver->ConnectionInit = DriverConnectionInit;
+  driver->ConnectionGetInfo = DriverConnectionGetInfo;
   driver->ConnectionNew = DriverConnectionNew;
   driver->ConnectionRelease = DriverConnectionRelease;
 
@@ -391,6 +442,31 @@ AdbcStatusCode DriverConnectionRelease(AdbcConnection* connection,
   return Ok(error);
 }
 
+AdbcStatusCode DriverConnectionGetInfo(AdbcConnection* connection,
+                                       uint32_t const* info_codes,
+                                       size_t info_codes_length,
+                                       ArrowArrayStream* out,
+                                       AdbcError* error) {
+  ConnectionState* state = GetConnection(connection);
+  if (state == nullptr || !state->initialized) {
+    return InvalidState(error, "connection is not initialized");
+  }
+
+  std::string remote_vendor_version;
+  AdbcStatusCode status =
+      QueryRemoteVendorVersion(state, &remote_vendor_version, error);
+  if (status != ADBC_STATUS_OK) {
+    return status;
+  }
+
+  auto const result = adbc_driver_quack::BuildGetInfoStream(
+      remote_vendor_version, info_codes, info_codes_length, out);
+  if (result.status != ADBC_STATUS_OK) {
+    return SetError(error, result.status, result.message);
+  }
+  return Ok(error);
+}
+
 AdbcStatusCode DriverStatementNew(AdbcConnection* connection,
                                   AdbcStatement* statement, AdbcError* error) {
   if (statement == nullptr) {
@@ -510,6 +586,15 @@ ADBC_EXPORT AdbcStatusCode AdbcConnectionInit(AdbcConnection* connection,
 ADBC_EXPORT AdbcStatusCode AdbcConnectionRelease(AdbcConnection* connection,
                                                  AdbcError* error) {
   return DriverConnectionRelease(connection, error);
+}
+
+ADBC_EXPORT AdbcStatusCode AdbcConnectionGetInfo(AdbcConnection* connection,
+                                                 uint32_t const* info_codes,
+                                                 size_t info_codes_length,
+                                                 ArrowArrayStream* out,
+                                                 AdbcError* error) {
+  return DriverConnectionGetInfo(connection, info_codes, info_codes_length, out,
+                                 error);
 }
 
 ADBC_EXPORT AdbcStatusCode AdbcStatementNew(AdbcConnection* connection,
