@@ -11,7 +11,7 @@ target_include_directories(adbc_driver_quack_helpers
 
 target_link_libraries(adbc_driver_quack_helpers
   PUBLIC
-    duckdb
+    duckdb_static
     uriparser)
 
 set_target_properties(adbc_driver_quack_helpers PROPERTIES
@@ -24,7 +24,7 @@ add_library(adbc_driver_quack SHARED
 target_link_libraries(adbc_driver_quack
   PRIVATE
     adbc_driver_quack_helpers
-    duckdb)
+    duckdb_static)
 
 target_include_directories(adbc_driver_quack
   PUBLIC
