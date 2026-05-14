@@ -1,3 +1,17 @@
+// Copyright (c) 2026 ADBC Drivers Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//         http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include "duckdb_arrow_stream.h"
 
 #include <cerrno>
@@ -45,7 +59,7 @@ std::string DuckDbArrowError(duckdb_arrow result, std::string fallback) {
   if (result == nullptr) {
     return fallback;
   }
-  const char* error = duckdb_query_arrow_error(result);
+  char const* error = duckdb_query_arrow_error(result);
   if (error == nullptr || error[0] == '\0') {
     return fallback;
   }
@@ -77,8 +91,8 @@ int StreamGetNext(ArrowArrayStream* stream, ArrowArray* out) {
   }
   std::memset(out, 0, sizeof(*out));
   auto* array = out;
-  if (duckdb_query_arrow_array(
-          state->result, reinterpret_cast<duckdb_arrow_array*>(&array)) !=
+  if (duckdb_query_arrow_array(state->result,
+                               reinterpret_cast<duckdb_arrow_array*>(&array)) !=
       DuckDBSuccess) {
     state->last_error =
         DuckDbArrowError(state->result, "failed to get DuckDB Arrow array");
@@ -88,7 +102,7 @@ int StreamGetNext(ArrowArrayStream* stream, ArrowArray* out) {
   return 0;
 }
 
-const char* StreamGetLastError(ArrowArrayStream* stream) {
+char const* StreamGetLastError(ArrowArrayStream* stream) {
   auto* state = GetState(stream);
   if (state == nullptr) {
     return "DuckDB Arrow stream is released";
@@ -125,14 +139,14 @@ DuckDbArrowQueryResult ExecuteDuckDbArrowQuery(duckdb_connection connection,
   duckdb_arrow result = nullptr;
   if (duckdb_query_arrow(connection, sql_storage.c_str(), &result) !=
       DuckDBSuccess) {
-    const std::string message =
+    std::string const message =
         DuckDbArrowError(result, "DuckDB Arrow query failed");
     duckdb_destroy_arrow(&result);
     return Error(ADBC_STATUS_IO, message);
   }
 
   if (rows_affected != nullptr) {
-    const idx_t rows_changed = duckdb_arrow_rows_changed(result);
+    idx_t const rows_changed = duckdb_arrow_rows_changed(result);
     *rows_affected = rows_changed > 0 ? static_cast<int64_t>(rows_changed) : -1;
   }
 

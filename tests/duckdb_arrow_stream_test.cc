@@ -1,3 +1,17 @@
+// Copyright (c) 2026 ADBC Drivers Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//         http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include "duckdb_arrow_stream.h"
 
 #include <arrow-adbc/adbc.h>
@@ -12,7 +26,7 @@ TEST(DuckDbArrowStreamTest, ExecutesQueryAsArrowStream) {
 
   ArrowArrayStream stream = {};
   int64_t rows_affected = 0;
-  const auto result = adbc_driver_quack::ExecuteDuckDbArrowQuery(
+  auto const result = adbc_driver_quack::ExecuteDuckDbArrowQuery(
       connection, "SELECT 42 AS answer", &stream, &rows_affected);
 
   EXPECT_EQ(result.status, ADBC_STATUS_OK);
