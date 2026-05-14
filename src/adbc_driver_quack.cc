@@ -33,31 +33,34 @@
 #include "sql_escape.h"
 
 extern "C" {
-AdbcStatusCode AdbcDatabaseInit(AdbcDatabase* database, AdbcError* error);
-AdbcStatusCode AdbcDatabaseNew(AdbcDatabase* database, AdbcError* error);
-AdbcStatusCode AdbcDatabaseSetOption(AdbcDatabase* database, char const* key,
-                                     char const* value, AdbcError* error);
-AdbcStatusCode AdbcDatabaseRelease(AdbcDatabase* database, AdbcError* error);
-AdbcStatusCode AdbcConnectionInit(AdbcConnection* connection,
-                                  AdbcDatabase* database, AdbcError* error);
-AdbcStatusCode AdbcConnectionNew(AdbcConnection* connection, AdbcError* error);
-AdbcStatusCode AdbcConnectionRelease(AdbcConnection* connection,
-                                     AdbcError* error);
-AdbcStatusCode AdbcStatementBind(AdbcStatement* statement, ArrowArray* values,
-                                 ArrowSchema* schema, AdbcError* error);
-AdbcStatusCode AdbcStatementBindStream(AdbcStatement* statement,
-                                       ArrowArrayStream* stream,
+AdbcStatusCode DriverDatabaseInit(AdbcDatabase* database, AdbcError* error);
+AdbcStatusCode DriverDatabaseNew(AdbcDatabase* database, AdbcError* error);
+AdbcStatusCode DriverDatabaseSetOption(AdbcDatabase* database, char const* key,
+                                       char const* value, AdbcError* error);
+AdbcStatusCode DriverDatabaseRelease(AdbcDatabase* database, AdbcError* error);
+AdbcStatusCode DriverConnectionInit(AdbcConnection* connection,
+                                    AdbcDatabase* database, AdbcError* error);
+AdbcStatusCode DriverConnectionNew(AdbcConnection* connection,
+                                   AdbcError* error);
+AdbcStatusCode DriverConnectionRelease(AdbcConnection* connection,
                                        AdbcError* error);
-AdbcStatusCode AdbcStatementExecuteQuery(AdbcStatement* statement,
-                                         ArrowArrayStream* out,
-                                         int64_t* rows_affected,
+AdbcStatusCode DriverStatementBind(AdbcStatement* statement, ArrowArray* values,
+                                   ArrowSchema* schema, AdbcError* error);
+AdbcStatusCode DriverStatementBindStream(AdbcStatement* statement,
+                                         ArrowArrayStream* stream,
                                          AdbcError* error);
-AdbcStatusCode AdbcStatementNew(AdbcConnection* connection,
-                                AdbcStatement* statement, AdbcError* error);
-AdbcStatusCode AdbcStatementPrepare(AdbcStatement* statement, AdbcError* error);
-AdbcStatusCode AdbcStatementRelease(AdbcStatement* statement, AdbcError* error);
-AdbcStatusCode AdbcStatementSetSqlQuery(AdbcStatement* statement,
-                                        char const* query, AdbcError* error);
+AdbcStatusCode DriverStatementExecuteQuery(AdbcStatement* statement,
+                                           ArrowArrayStream* out,
+                                           int64_t* rows_affected,
+                                           AdbcError* error);
+AdbcStatusCode DriverStatementNew(AdbcConnection* connection,
+                                  AdbcStatement* statement, AdbcError* error);
+AdbcStatusCode DriverStatementPrepare(AdbcStatement* statement,
+                                      AdbcError* error);
+AdbcStatusCode DriverStatementRelease(AdbcStatement* statement,
+                                      AdbcError* error);
+AdbcStatusCode DriverStatementSetSqlQuery(AdbcStatement* statement,
+                                          char const* query, AdbcError* error);
 }
 
 namespace {
@@ -100,15 +103,22 @@ void ClearError(AdbcError* error) {
   if (error == nullptr) {
     return;
   }
+  bool const preserve_private_driver =
+      error->vendor_code == ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA;
+  AdbcDriver* const private_driver = error->private_driver;
   if (error->release != nullptr) {
     error->release(error);
-    return;
+  } else {
+    error->message = nullptr;
+    error->vendor_code = 0;
+    std::memset(error->sqlstate, 0, sizeof(error->sqlstate));
+    error->private_data = nullptr;
+    error->private_driver = nullptr;
   }
-  error->message = nullptr;
-  error->vendor_code = 0;
-  std::memset(error->sqlstate, 0, sizeof(error->sqlstate));
-  error->private_data = nullptr;
-  error->private_driver = nullptr;
+  if (preserve_private_driver) {
+    error->vendor_code = ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA;
+    error->private_driver = private_driver;
+  }
 }
 
 AdbcStatusCode SetError(AdbcError* error, AdbcStatusCode status,
@@ -224,6 +234,12 @@ AdbcStatusCode InitDriver(int version, void* raw_driver, AdbcError* error) {
   }
 
   auto* driver = static_cast<AdbcDriver*>(raw_driver);
+  if (version >= ADBC_VERSION_1_1_0) {
+    std::memset(driver, 0, ADBC_DRIVER_1_1_0_SIZE);
+  } else {
+    std::memset(driver, 0, ADBC_DRIVER_1_0_0_SIZE);
+  }
+
   auto* driver_state = new (std::nothrow) DriverState{version};
   if (driver_state == nullptr) {
     return SetError(error, ADBC_STATUS_UNKNOWN,
@@ -232,22 +248,22 @@ AdbcStatusCode InitDriver(int version, void* raw_driver, AdbcError* error) {
   driver->private_data = driver_state;
   driver->release = ReleaseDriver;
 
-  driver->DatabaseInit = AdbcDatabaseInit;
-  driver->DatabaseNew = AdbcDatabaseNew;
-  driver->DatabaseSetOption = AdbcDatabaseSetOption;
-  driver->DatabaseRelease = AdbcDatabaseRelease;
+  driver->DatabaseInit = DriverDatabaseInit;
+  driver->DatabaseNew = DriverDatabaseNew;
+  driver->DatabaseSetOption = DriverDatabaseSetOption;
+  driver->DatabaseRelease = DriverDatabaseRelease;
 
-  driver->ConnectionInit = AdbcConnectionInit;
-  driver->ConnectionNew = AdbcConnectionNew;
-  driver->ConnectionRelease = AdbcConnectionRelease;
+  driver->ConnectionInit = DriverConnectionInit;
+  driver->ConnectionNew = DriverConnectionNew;
+  driver->ConnectionRelease = DriverConnectionRelease;
 
-  driver->StatementBind = AdbcStatementBind;
-  driver->StatementBindStream = AdbcStatementBindStream;
-  driver->StatementExecuteQuery = AdbcStatementExecuteQuery;
-  driver->StatementNew = AdbcStatementNew;
-  driver->StatementPrepare = AdbcStatementPrepare;
-  driver->StatementRelease = AdbcStatementRelease;
-  driver->StatementSetSqlQuery = AdbcStatementSetSqlQuery;
+  driver->StatementBind = DriverStatementBind;
+  driver->StatementBindStream = DriverStatementBindStream;
+  driver->StatementExecuteQuery = DriverStatementExecuteQuery;
+  driver->StatementNew = DriverStatementNew;
+  driver->StatementPrepare = DriverStatementPrepare;
+  driver->StatementRelease = DriverStatementRelease;
+  driver->StatementSetSqlQuery = DriverStatementSetSqlQuery;
 
   return Ok(error);
 }
@@ -256,17 +272,16 @@ AdbcStatusCode InitDriver(int version, void* raw_driver, AdbcError* error) {
 
 extern "C" {
 
-AdbcStatusCode AdbcDatabaseNew(AdbcDatabase* database, AdbcError* error) {
+AdbcStatusCode DriverDatabaseNew(AdbcDatabase* database, AdbcError* error) {
   if (database == nullptr) {
     return InvalidArgument(error, "database must not be null");
   }
   database->private_data = new DatabaseState();
-  database->private_driver = nullptr;
   return Ok(error);
 }
 
-AdbcStatusCode AdbcDatabaseSetOption(AdbcDatabase* database, char const* key,
-                                     char const* value, AdbcError* error) {
+AdbcStatusCode DriverDatabaseSetOption(AdbcDatabase* database, char const* key,
+                                       char const* value, AdbcError* error) {
   DatabaseState* state = GetDatabase(database);
   if (state == nullptr) {
     return InvalidState(error, "database is not initialized");
@@ -288,7 +303,7 @@ AdbcStatusCode AdbcDatabaseSetOption(AdbcDatabase* database, char const* key,
   return Ok(error);
 }
 
-AdbcStatusCode AdbcDatabaseInit(AdbcDatabase* database, AdbcError* error) {
+AdbcStatusCode DriverDatabaseInit(AdbcDatabase* database, AdbcError* error) {
   DatabaseState* state = GetDatabase(database);
   if (state == nullptr) {
     return InvalidState(error, "database is not initialized");
@@ -300,27 +315,26 @@ AdbcStatusCode AdbcDatabaseInit(AdbcDatabase* database, AdbcError* error) {
   return Ok(error);
 }
 
-AdbcStatusCode AdbcDatabaseRelease(AdbcDatabase* database, AdbcError* error) {
+AdbcStatusCode DriverDatabaseRelease(AdbcDatabase* database, AdbcError* error) {
   if (database == nullptr) {
     return Ok(error);
   }
   delete GetDatabase(database);
   database->private_data = nullptr;
-  database->private_driver = nullptr;
   return Ok(error);
 }
 
-AdbcStatusCode AdbcConnectionNew(AdbcConnection* connection, AdbcError* error) {
+AdbcStatusCode DriverConnectionNew(AdbcConnection* connection,
+                                   AdbcError* error) {
   if (connection == nullptr) {
     return InvalidArgument(error, "connection must not be null");
   }
   connection->private_data = new ConnectionState();
-  connection->private_driver = nullptr;
   return Ok(error);
 }
 
-AdbcStatusCode AdbcConnectionInit(AdbcConnection* connection,
-                                  AdbcDatabase* database, AdbcError* error) {
+AdbcStatusCode DriverConnectionInit(AdbcConnection* connection,
+                                    AdbcDatabase* database, AdbcError* error) {
   ConnectionState* connection_state = GetConnection(connection);
   DatabaseState* database_state = GetDatabase(database);
   if (connection_state == nullptr) {
@@ -345,22 +359,16 @@ AdbcStatusCode AdbcConnectionInit(AdbcConnection* connection,
     return status;
   }
 
+  std::string attach = "ATTACH " +
+                       adbc_driver_quack::DuckDbSqlStringLiteral(
+                           database_state->parsed_uri.endpoint) +
+                       " AS remote (disable_ssl true";
   if (!database_state->parsed_uri.token.empty()) {
-    std::string const create_secret = "CREATE SECRET (TYPE quack, TOKEN " +
-                                      adbc_driver_quack::DuckDbSqlStringLiteral(
-                                          database_state->parsed_uri.token) +
-                                      ")";
-    status = RunDuckDbQuery(connection_state, create_secret, error);
-    if (status != ADBC_STATUS_OK) {
-      CloseConnectionState(connection_state);
-      return status;
-    }
+    attach += ", token ";
+    attach += adbc_driver_quack::DuckDbSqlStringLiteral(
+        database_state->parsed_uri.token);
   }
-
-  std::string const attach = "ATTACH " +
-                             adbc_driver_quack::DuckDbSqlStringLiteral(
-                                 database_state->parsed_uri.endpoint) +
-                             " AS remote";
+  attach += ")";
   status = RunDuckDbQuery(connection_state, attach, error);
   if (status != ADBC_STATUS_OK) {
     CloseConnectionState(connection_state);
@@ -371,8 +379,8 @@ AdbcStatusCode AdbcConnectionInit(AdbcConnection* connection,
   return Ok(error);
 }
 
-AdbcStatusCode AdbcConnectionRelease(AdbcConnection* connection,
-                                     AdbcError* error) {
+AdbcStatusCode DriverConnectionRelease(AdbcConnection* connection,
+                                       AdbcError* error) {
   if (connection == nullptr) {
     return Ok(error);
   }
@@ -380,12 +388,11 @@ AdbcStatusCode AdbcConnectionRelease(AdbcConnection* connection,
   CloseConnectionState(state);
   delete state;
   connection->private_data = nullptr;
-  connection->private_driver = nullptr;
   return Ok(error);
 }
 
-AdbcStatusCode AdbcStatementNew(AdbcConnection* connection,
-                                AdbcStatement* statement, AdbcError* error) {
+AdbcStatusCode DriverStatementNew(AdbcConnection* connection,
+                                  AdbcStatement* statement, AdbcError* error) {
   if (statement == nullptr) {
     return InvalidArgument(error, "statement must not be null");
   }
@@ -394,12 +401,11 @@ AdbcStatusCode AdbcStatementNew(AdbcConnection* connection,
     return InvalidState(error, "connection is not initialized");
   }
   statement->private_data = new StatementState{connection_state, {}};
-  statement->private_driver = nullptr;
   return Ok(error);
 }
 
-AdbcStatusCode AdbcStatementSetSqlQuery(AdbcStatement* statement,
-                                        char const* query, AdbcError* error) {
+AdbcStatusCode DriverStatementSetSqlQuery(AdbcStatement* statement,
+                                          char const* query, AdbcError* error) {
   StatementState* state = GetStatement(statement);
   if (state == nullptr) {
     return InvalidState(error, "statement is not initialized");
@@ -411,10 +417,10 @@ AdbcStatusCode AdbcStatementSetSqlQuery(AdbcStatement* statement,
   return Ok(error);
 }
 
-AdbcStatusCode AdbcStatementExecuteQuery(AdbcStatement* statement,
-                                         ArrowArrayStream* out,
-                                         int64_t* rows_affected,
-                                         AdbcError* error) {
+AdbcStatusCode DriverStatementExecuteQuery(AdbcStatement* statement,
+                                           ArrowArrayStream* out,
+                                           int64_t* rows_affected,
+                                           AdbcError* error) {
   StatementState* state = GetStatement(statement);
   if (state == nullptr) {
     return InvalidState(error, "statement is not initialized");
@@ -444,29 +450,108 @@ AdbcStatusCode AdbcStatementExecuteQuery(AdbcStatement* statement,
   return status;
 }
 
-AdbcStatusCode AdbcStatementPrepare(AdbcStatement*, AdbcError* error) {
+AdbcStatusCode DriverStatementPrepare(AdbcStatement*, AdbcError* error) {
   return NotImplemented(error, "parameterized statements are not implemented");
 }
 
-AdbcStatusCode AdbcStatementBind(AdbcStatement*, ArrowArray*, ArrowSchema*,
-                                 AdbcError* error) {
+AdbcStatusCode DriverStatementBind(AdbcStatement*, ArrowArray*, ArrowSchema*,
+                                   AdbcError* error) {
   return NotImplemented(error, "parameter binding is not implemented");
 }
 
-AdbcStatusCode AdbcStatementBindStream(AdbcStatement*, ArrowArrayStream*,
-                                       AdbcError* error) {
+AdbcStatusCode DriverStatementBindStream(AdbcStatement*, ArrowArrayStream*,
+                                         AdbcError* error) {
   return NotImplemented(error, "parameter binding is not implemented");
 }
 
-AdbcStatusCode AdbcStatementRelease(AdbcStatement* statement,
-                                    AdbcError* error) {
+AdbcStatusCode DriverStatementRelease(AdbcStatement* statement,
+                                      AdbcError* error) {
   if (statement == nullptr) {
     return Ok(error);
   }
   delete GetStatement(statement);
   statement->private_data = nullptr;
-  statement->private_driver = nullptr;
   return Ok(error);
+}
+
+ADBC_EXPORT AdbcStatusCode AdbcDatabaseNew(AdbcDatabase* database,
+                                           AdbcError* error) {
+  return DriverDatabaseNew(database, error);
+}
+
+ADBC_EXPORT AdbcStatusCode AdbcDatabaseSetOption(AdbcDatabase* database,
+                                                 char const* key,
+                                                 char const* value,
+                                                 AdbcError* error) {
+  return DriverDatabaseSetOption(database, key, value, error);
+}
+
+ADBC_EXPORT AdbcStatusCode AdbcDatabaseInit(AdbcDatabase* database,
+                                            AdbcError* error) {
+  return DriverDatabaseInit(database, error);
+}
+
+ADBC_EXPORT AdbcStatusCode AdbcDatabaseRelease(AdbcDatabase* database,
+                                               AdbcError* error) {
+  return DriverDatabaseRelease(database, error);
+}
+
+ADBC_EXPORT AdbcStatusCode AdbcConnectionNew(AdbcConnection* connection,
+                                             AdbcError* error) {
+  return DriverConnectionNew(connection, error);
+}
+
+ADBC_EXPORT AdbcStatusCode AdbcConnectionInit(AdbcConnection* connection,
+                                              AdbcDatabase* database,
+                                              AdbcError* error) {
+  return DriverConnectionInit(connection, database, error);
+}
+
+ADBC_EXPORT AdbcStatusCode AdbcConnectionRelease(AdbcConnection* connection,
+                                                 AdbcError* error) {
+  return DriverConnectionRelease(connection, error);
+}
+
+ADBC_EXPORT AdbcStatusCode AdbcStatementNew(AdbcConnection* connection,
+                                            AdbcStatement* statement,
+                                            AdbcError* error) {
+  return DriverStatementNew(connection, statement, error);
+}
+
+ADBC_EXPORT AdbcStatusCode AdbcStatementSetSqlQuery(AdbcStatement* statement,
+                                                    char const* query,
+                                                    AdbcError* error) {
+  return DriverStatementSetSqlQuery(statement, query, error);
+}
+
+ADBC_EXPORT AdbcStatusCode AdbcStatementExecuteQuery(AdbcStatement* statement,
+                                                     ArrowArrayStream* out,
+                                                     int64_t* rows_affected,
+                                                     AdbcError* error) {
+  return DriverStatementExecuteQuery(statement, out, rows_affected, error);
+}
+
+ADBC_EXPORT AdbcStatusCode AdbcStatementPrepare(AdbcStatement* statement,
+                                                AdbcError* error) {
+  return DriverStatementPrepare(statement, error);
+}
+
+ADBC_EXPORT AdbcStatusCode AdbcStatementBind(AdbcStatement* statement,
+                                             ArrowArray* values,
+                                             ArrowSchema* schema,
+                                             AdbcError* error) {
+  return DriverStatementBind(statement, values, schema, error);
+}
+
+ADBC_EXPORT AdbcStatusCode AdbcStatementBindStream(AdbcStatement* statement,
+                                                   ArrowArrayStream* stream,
+                                                   AdbcError* error) {
+  return DriverStatementBindStream(statement, stream, error);
+}
+
+ADBC_EXPORT AdbcStatusCode AdbcStatementRelease(AdbcStatement* statement,
+                                                AdbcError* error) {
+  return DriverStatementRelease(statement, error);
 }
 
 ADBC_EXPORT AdbcStatusCode AdbcDriverInit(int version, void* driver,

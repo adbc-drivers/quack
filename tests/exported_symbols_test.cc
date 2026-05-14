@@ -15,6 +15,8 @@
 #include <arrow-adbc/adbc.h>
 #include <gtest/gtest.h>
 
+#include <cstring>
+
 #if defined(_WIN32)
 #include <windows.h>
 #else
@@ -109,6 +111,35 @@ TEST(ExportedSymbolsTest, DriverInitFunctionsPopulateDriverTable) {
     EXPECT_NE(driver.StatementBind, nullptr) << init_symbol;
     EXPECT_NE(driver.StatementBindStream, nullptr) << init_symbol;
     EXPECT_NE(driver.StatementRelease, nullptr) << init_symbol;
+    EXPECT_EQ(driver.release(&driver, &error), ADBC_STATUS_OK) << init_symbol;
+  }
+
+  CloseLibrary(library);
+}
+
+TEST(ExportedSymbolsTest, DriverInitFunctionsClearUnsupportedCallbacks) {
+  void* library = OpenLibrary(ADBC_DRIVER_QUACK_LIBRARY_PATH);
+  ASSERT_NE(library, nullptr);
+
+  char const* init_symbols[] = {
+      "AdbcDriverInit",
+      "AdbcDriverQuackInit",
+  };
+
+  for (char const* init_symbol : init_symbols) {
+    auto const init = FindFunction<AdbcDriverInitFunc>(library, init_symbol);
+    ASSERT_NE(init, nullptr) << init_symbol;
+
+    AdbcDriver driver;
+    std::memset(&driver, 0xAB, sizeof(driver));
+    AdbcError error = ADBC_ERROR_INIT;
+    EXPECT_EQ(init(ADBC_VERSION_1_1_0, &driver, &error), ADBC_STATUS_OK)
+        << init_symbol;
+
+    EXPECT_EQ(driver.DatabaseSetOptionInt, nullptr) << init_symbol;
+    EXPECT_EQ(driver.ConnectionGetInfo, nullptr) << init_symbol;
+    EXPECT_EQ(driver.StatementExecuteSchema, nullptr) << init_symbol;
+
     EXPECT_EQ(driver.release(&driver, &error), ADBC_STATUS_OK) << init_symbol;
   }
 

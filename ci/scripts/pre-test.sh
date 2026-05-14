@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-if [[ $# -ne 2 ]]; then
-  printf 'usage: %s <linux|macos|windows> <amd64|arm64>\n' "$0" >&2
+if [[ $# -lt 2 || $# -gt 3 ]]; then
+  printf 'usage: %s <linux|macos|windows> <amd64|arm64> [service-name]\n' "$0" >&2
   exit 2
 fi
