@@ -33,7 +33,10 @@ FetchContent_Declare(
   GIT_TAG v1.5.2
   PATCH_COMMAND
     ${CMAKE_COMMAND} -E chdir <SOURCE_DIR> git apply --ignore-whitespace
-    ${CMAKE_CURRENT_LIST_DIR}/cmake/patches/duckdb-disable-adbc.patch)
+    ${CMAKE_CURRENT_LIST_DIR}/cmake/patches/duckdb-disable-adbc.patch COMMAND
+    ${CMAKE_COMMAND} -E chdir <SOURCE_DIR> git apply --ignore-whitespace
+    ${CMAKE_CURRENT_LIST_DIR}/cmake/patches/duckdb-msvc-uncaught-exception.patch
+)
 
 FetchContent_Declare(
   adbc_driver_quack_quack
