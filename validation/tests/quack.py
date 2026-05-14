@@ -33,7 +33,7 @@ class QuackQuirks(model.DriverQuirks):
         connection_transactions=False,
         get_objects=False,
         statement_bind=False,
-        statement_bulk_ingest=False,
+        statement_bulk_ingest=True,
         statement_execute_schema=False,
         statement_get_parameter_schema=False,
         statement_prepare=False,
