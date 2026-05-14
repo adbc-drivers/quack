@@ -12,11 +12,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 5412cc6..de41faf 100644
---- a/CMakeLists.txt
-+++ b/CMakeLists.txt
-@@ -13,2 +13,2 @@ project(${TARGET_NAME})
--include_directories(src/include duckdb/third_party/httplib duckdb/extension/autocomplete/include)
-+include_directories(src/include ${DUCKDB_MODULE_BASE_DIR}/third_party/httplib ${DUCKDB_MODULE_BASE_DIR}/extension/autocomplete/include)
- add_subdirectory(src)
+.github/workflows/dev_issues.yaml
+third_party/arrow-adbc/include/arrow-adbc/adbc.h

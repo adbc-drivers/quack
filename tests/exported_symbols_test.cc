@@ -1,5 +1,18 @@
-#include <arrow-adbc/adbc.h>
+// Copyright (c) 2026 ADBC Drivers Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//         http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
+#include <arrow-adbc/adbc.h>
 #include <gtest/gtest.h>
 
 #if defined(_WIN32)
@@ -10,7 +23,7 @@
 
 namespace {
 
-void* OpenLibrary(const char* path) {
+void* OpenLibrary(char const* path) {
 #if defined(_WIN32)
   return reinterpret_cast<void*>(LoadLibraryA(path));
 #else
@@ -18,16 +31,17 @@ void* OpenLibrary(const char* path) {
 #endif
 }
 
-void* FindSymbol(void* library, const char* name) {
+void* FindSymbol(void* library, char const* name) {
 #if defined(_WIN32)
-  return reinterpret_cast<void*>(GetProcAddress(reinterpret_cast<HMODULE>(library), name));
+  return reinterpret_cast<void*>(
+      GetProcAddress(reinterpret_cast<HMODULE>(library), name));
 #else
   return dlsym(library, name);
 #endif
 }
 
 template <typename Function>
-Function FindFunction(void* library, const char* name) {
+Function FindFunction(void* library, char const* name) {
   return reinterpret_cast<Function>(FindSymbol(library, name));
 }
 
@@ -45,26 +59,18 @@ TEST(ExportedSymbolsTest, ExportsRequiredAdbcEntryPoints) {
   void* library = OpenLibrary(ADBC_DRIVER_QUACK_LIBRARY_PATH);
   ASSERT_NE(library, nullptr);
 
-  const char* symbols[] = {
-      "AdbcDatabaseNew",
-      "AdbcDatabaseSetOption",
-      "AdbcDatabaseInit",
-      "AdbcDatabaseRelease",
-      "AdbcConnectionNew",
-      "AdbcConnectionInit",
-      "AdbcConnectionRelease",
-      "AdbcStatementNew",
-      "AdbcStatementSetSqlQuery",
-      "AdbcStatementExecuteQuery",
-      "AdbcStatementPrepare",
-      "AdbcStatementBind",
-      "AdbcStatementBindStream",
-      "AdbcStatementRelease",
-      "AdbcDriverInit",
-      "AdbcDriverQuackInit",
+  char const* symbols[] = {
+      "AdbcDatabaseNew",          "AdbcDatabaseSetOption",
+      "AdbcDatabaseInit",         "AdbcDatabaseRelease",
+      "AdbcConnectionNew",        "AdbcConnectionInit",
+      "AdbcConnectionRelease",    "AdbcStatementNew",
+      "AdbcStatementSetSqlQuery", "AdbcStatementExecuteQuery",
+      "AdbcStatementPrepare",     "AdbcStatementBind",
+      "AdbcStatementBindStream",  "AdbcStatementRelease",
+      "AdbcDriverInit",           "AdbcDriverQuackInit",
   };
 
-  for (const char* symbol : symbols) {
+  for (char const* symbol : symbols) {
     EXPECT_NE(FindSymbol(library, symbol), nullptr) << symbol;
   }
 
@@ -75,13 +81,13 @@ TEST(ExportedSymbolsTest, DriverInitFunctionsPopulateDriverTable) {
   void* library = OpenLibrary(ADBC_DRIVER_QUACK_LIBRARY_PATH);
   ASSERT_NE(library, nullptr);
 
-  const char* init_symbols[] = {
+  char const* init_symbols[] = {
       "AdbcDriverInit",
       "AdbcDriverQuackInit",
   };
 
-  for (const char* init_symbol : init_symbols) {
-    const auto init = FindFunction<AdbcDriverInitFunc>(library, init_symbol);
+  for (char const* init_symbol : init_symbols) {
+    auto const init = FindFunction<AdbcDriverInitFunc>(library, init_symbol);
     ASSERT_NE(init, nullptr) << init_symbol;
 
     AdbcDriver driver = {};

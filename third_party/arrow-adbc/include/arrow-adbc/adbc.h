@@ -1,3 +1,8 @@
+// Copyright (c) 2026 ADBC Drivers Contributors
+//
+// This file has been modified from its original version, which is
+// under the Apache License:
+//
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -67,9 +72,9 @@ extern "C" {
 
 struct ArrowSchema {
   // Array type description
-  const char* format;
-  const char* name;
-  const char* metadata;
+  char const* format;
+  char const* name;
+  char const* metadata;
   int64_t flags;
   int64_t n_children;
   struct ArrowSchema** children;
@@ -88,7 +93,7 @@ struct ArrowArray {
   int64_t offset;
   int64_t n_buffers;
   int64_t n_children;
-  const void** buffers;
+  void const** buffers;
   struct ArrowArray** children;
   struct ArrowArray* dictionary;
 
@@ -109,7 +114,8 @@ struct ArrowArrayStream {
   //
   // Return value: 0 if successful, an `errno`-compatible error code otherwise.
   //
-  // If successful, the ArrowSchema must be released independently from the stream.
+  // If successful, the ArrowSchema must be released independently from the
+  // stream.
   int (*get_schema)(struct ArrowArrayStream*, struct ArrowSchema* out);
 
   // Callback to get the next array
@@ -117,7 +123,8 @@ struct ArrowArrayStream {
   //
   // Return value: 0 if successful, an `errno`-compatible error code otherwise.
   //
-  // If successful, the ArrowArray must be released independently from the stream.
+  // If successful, the ArrowArray must be released independently from the
+  // stream.
   int (*get_next)(struct ArrowArrayStream*, struct ArrowArray* out);
 
   // Callback to get optional detailed error information.
@@ -129,7 +136,7 @@ struct ArrowArrayStream {
   //
   // The returned pointer is only valid until the next operation on this stream
   // (including release).
-  const char* (*get_last_error)(struct ArrowArrayStream*);
+  char const* (*get_last_error)(struct ArrowArrayStream*);
 
   // Release callback: release the stream's own resources.
   // Note that arrays returned by `get_next` must be individually released.
@@ -332,9 +339,13 @@ struct ADBC_EXPORT AdbcError {
 /// \brief A helper to initialize the full AdbcError structure.
 ///
 /// \since ADBC API revision 1.1.0
-#define ADBC_ERROR_INIT \
-  ((struct AdbcError){  \
-      NULL, ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA, {0, 0, 0, 0, 0}, NULL, NULL, NULL})
+#define ADBC_ERROR_INIT                                    \
+  ((struct AdbcError){NULL,                                \
+                      ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA, \
+                      {0, 0, 0, 0, 0},                     \
+                      NULL,                                \
+                      NULL,                                \
+                      NULL})
 #endif
 
 /// \brief The size of the AdbcError structure in ADBC 1.0.0.
@@ -364,9 +375,9 @@ struct ADBC_EXPORT AdbcError {
 /// \since ADBC API revision 1.1.0
 struct ADBC_EXPORT AdbcErrorDetail {
   /// \brief The metadata key.
-  const char* key;
+  char const* key;
   /// \brief The binary metadata value.
-  const uint8_t* value;
+  uint8_t const* value;
   /// \brief The length of the metadata value.
   size_t value_length;
 };
@@ -384,7 +395,8 @@ int AdbcErrorGetDetailCount(const struct AdbcError* error);
 ///
 /// \since ADBC API revision 1.1.0
 ADBC_EXPORT
-struct AdbcErrorDetail AdbcErrorGetDetail(const struct AdbcError* error, int index);
+struct AdbcErrorDetail AdbcErrorGetDetail(const struct AdbcError* error,
+                                          int index);
 
 /// \brief Get an ADBC error from an ArrowArrayStream created by a driver.
 ///
@@ -401,8 +413,8 @@ struct AdbcErrorDetail AdbcErrorGetDetail(const struct AdbcError* error, int ind
 /// \return NULL if not supported.
 /// \since ADBC API revision 1.1.0
 ADBC_EXPORT
-const struct AdbcError* AdbcErrorFromArrayStream(struct ArrowArrayStream* stream,
-                                                 AdbcStatusCode* status);
+const struct AdbcError* AdbcErrorFromArrayStream(
+    struct ArrowArrayStream* stream, AdbcStatusCode* status);
 
 /// @}
 
@@ -953,10 +965,10 @@ struct AdbcPartitions {
   /// \brief The partitions of the result set, where each entry (up to
   ///   num_partitions entries) is an opaque identifier that can be
   ///   passed to AdbcConnectionReadPartition.
-  const uint8_t** partitions;
+  uint8_t const** partitions;
 
   /// \brief The length of each corresponding entry in partitions.
-  const size_t* partition_lengths;
+  size_t const* partition_lengths;
 
   /// \brief Opaque implementation-defined state.
   /// This field is NULLPTR iff the connection is uninitialized/freed.
@@ -1003,54 +1015,66 @@ struct ADBC_EXPORT AdbcDriver {
 
   AdbcStatusCode (*DatabaseInit)(struct AdbcDatabase*, struct AdbcError*);
   AdbcStatusCode (*DatabaseNew)(struct AdbcDatabase*, struct AdbcError*);
-  AdbcStatusCode (*DatabaseSetOption)(struct AdbcDatabase*, const char*, const char*,
-                                      struct AdbcError*);
+  AdbcStatusCode (*DatabaseSetOption)(struct AdbcDatabase*, char const*,
+                                      char const*, struct AdbcError*);
   AdbcStatusCode (*DatabaseRelease)(struct AdbcDatabase*, struct AdbcError*);
 
   AdbcStatusCode (*ConnectionCommit)(struct AdbcConnection*, struct AdbcError*);
-  AdbcStatusCode (*ConnectionGetInfo)(struct AdbcConnection*, const uint32_t*, size_t,
-                                      struct ArrowArrayStream*, struct AdbcError*);
-  AdbcStatusCode (*ConnectionGetObjects)(struct AdbcConnection*, int, const char*,
-                                         const char*, const char*, const char**,
-                                         const char*, struct ArrowArrayStream*,
+  AdbcStatusCode (*ConnectionGetInfo)(struct AdbcConnection*, uint32_t const*,
+                                      size_t, struct ArrowArrayStream*,
+                                      struct AdbcError*);
+  AdbcStatusCode (*ConnectionGetObjects)(struct AdbcConnection*, int,
+                                         char const*, char const*, char const*,
+                                         char const**, char const*,
+                                         struct ArrowArrayStream*,
                                          struct AdbcError*);
-  AdbcStatusCode (*ConnectionGetTableSchema)(struct AdbcConnection*, const char*,
-                                             const char*, const char*,
-                                             struct ArrowSchema*, struct AdbcError*);
+  AdbcStatusCode (*ConnectionGetTableSchema)(struct AdbcConnection*,
+                                             char const*, char const*,
+                                             char const*, struct ArrowSchema*,
+                                             struct AdbcError*);
   AdbcStatusCode (*ConnectionGetTableTypes)(struct AdbcConnection*,
-                                            struct ArrowArrayStream*, struct AdbcError*);
+                                            struct ArrowArrayStream*,
+                                            struct AdbcError*);
   AdbcStatusCode (*ConnectionInit)(struct AdbcConnection*, struct AdbcDatabase*,
                                    struct AdbcError*);
   AdbcStatusCode (*ConnectionNew)(struct AdbcConnection*, struct AdbcError*);
-  AdbcStatusCode (*ConnectionSetOption)(struct AdbcConnection*, const char*, const char*,
-                                        struct AdbcError*);
-  AdbcStatusCode (*ConnectionReadPartition)(struct AdbcConnection*, const uint8_t*,
-                                            size_t, struct ArrowArrayStream*,
+  AdbcStatusCode (*ConnectionSetOption)(struct AdbcConnection*, char const*,
+                                        char const*, struct AdbcError*);
+  AdbcStatusCode (*ConnectionReadPartition)(struct AdbcConnection*,
+                                            uint8_t const*, size_t,
+                                            struct ArrowArrayStream*,
                                             struct AdbcError*);
-  AdbcStatusCode (*ConnectionRelease)(struct AdbcConnection*, struct AdbcError*);
-  AdbcStatusCode (*ConnectionRollback)(struct AdbcConnection*, struct AdbcError*);
+  AdbcStatusCode (*ConnectionRelease)(struct AdbcConnection*,
+                                      struct AdbcError*);
+  AdbcStatusCode (*ConnectionRollback)(struct AdbcConnection*,
+                                       struct AdbcError*);
 
   AdbcStatusCode (*StatementBind)(struct AdbcStatement*, struct ArrowArray*,
                                   struct ArrowSchema*, struct AdbcError*);
-  AdbcStatusCode (*StatementBindStream)(struct AdbcStatement*, struct ArrowArrayStream*,
+  AdbcStatusCode (*StatementBindStream)(struct AdbcStatement*,
+                                        struct ArrowArrayStream*,
                                         struct AdbcError*);
-  AdbcStatusCode (*StatementExecuteQuery)(struct AdbcStatement*, struct ArrowArrayStream*,
-                                          int64_t*, struct AdbcError*);
-  AdbcStatusCode (*StatementExecutePartitions)(struct AdbcStatement*, struct ArrowSchema*,
+  AdbcStatusCode (*StatementExecuteQuery)(struct AdbcStatement*,
+                                          struct ArrowArrayStream*, int64_t*,
+                                          struct AdbcError*);
+  AdbcStatusCode (*StatementExecutePartitions)(struct AdbcStatement*,
+                                               struct ArrowSchema*,
                                                struct AdbcPartitions*, int64_t*,
                                                struct AdbcError*);
   AdbcStatusCode (*StatementGetParameterSchema)(struct AdbcStatement*,
-                                                struct ArrowSchema*, struct AdbcError*);
+                                                struct ArrowSchema*,
+                                                struct AdbcError*);
   AdbcStatusCode (*StatementNew)(struct AdbcConnection*, struct AdbcStatement*,
                                  struct AdbcError*);
   AdbcStatusCode (*StatementPrepare)(struct AdbcStatement*, struct AdbcError*);
   AdbcStatusCode (*StatementRelease)(struct AdbcStatement*, struct AdbcError*);
-  AdbcStatusCode (*StatementSetOption)(struct AdbcStatement*, const char*, const char*,
-                                       struct AdbcError*);
-  AdbcStatusCode (*StatementSetSqlQuery)(struct AdbcStatement*, const char*,
+  AdbcStatusCode (*StatementSetOption)(struct AdbcStatement*, char const*,
+                                       char const*, struct AdbcError*);
+  AdbcStatusCode (*StatementSetSqlQuery)(struct AdbcStatement*, char const*,
                                          struct AdbcError*);
-  AdbcStatusCode (*StatementSetSubstraitPlan)(struct AdbcStatement*, const uint8_t*,
-                                              size_t, struct AdbcError*);
+  AdbcStatusCode (*StatementSetSubstraitPlan)(struct AdbcStatement*,
+                                              uint8_t const*, size_t,
+                                              struct AdbcError*);
 
   /// \defgroup adbc-1.1.0 ADBC API Revision 1.1.0
   ///
@@ -1075,64 +1099,75 @@ struct ADBC_EXPORT AdbcDriver {
   /// @{
 
   int (*ErrorGetDetailCount)(const struct AdbcError* error);
-  struct AdbcErrorDetail (*ErrorGetDetail)(const struct AdbcError* error, int index);
-  const struct AdbcError* (*ErrorFromArrayStream)(struct ArrowArrayStream* stream,
-                                                  AdbcStatusCode* status);
+  struct AdbcErrorDetail (*ErrorGetDetail)(const struct AdbcError* error,
+                                           int index);
+  const struct AdbcError* (*ErrorFromArrayStream)(
+      struct ArrowArrayStream* stream, AdbcStatusCode* status);
 
-  AdbcStatusCode (*DatabaseGetOption)(struct AdbcDatabase*, const char*, char*, size_t*,
-                                      struct AdbcError*);
-  AdbcStatusCode (*DatabaseGetOptionBytes)(struct AdbcDatabase*, const char*, uint8_t*,
-                                           size_t*, struct AdbcError*);
-  AdbcStatusCode (*DatabaseGetOptionDouble)(struct AdbcDatabase*, const char*, double*,
-                                            struct AdbcError*);
-  AdbcStatusCode (*DatabaseGetOptionInt)(struct AdbcDatabase*, const char*, int64_t*,
-                                         struct AdbcError*);
-  AdbcStatusCode (*DatabaseSetOptionBytes)(struct AdbcDatabase*, const char*,
-                                           const uint8_t*, size_t, struct AdbcError*);
-  AdbcStatusCode (*DatabaseSetOptionDouble)(struct AdbcDatabase*, const char*, double,
-                                            struct AdbcError*);
-  AdbcStatusCode (*DatabaseSetOptionInt)(struct AdbcDatabase*, const char*, int64_t,
-                                         struct AdbcError*);
+  AdbcStatusCode (*DatabaseGetOption)(struct AdbcDatabase*, char const*, char*,
+                                      size_t*, struct AdbcError*);
+  AdbcStatusCode (*DatabaseGetOptionBytes)(struct AdbcDatabase*, char const*,
+                                           uint8_t*, size_t*,
+                                           struct AdbcError*);
+  AdbcStatusCode (*DatabaseGetOptionDouble)(struct AdbcDatabase*, char const*,
+                                            double*, struct AdbcError*);
+  AdbcStatusCode (*DatabaseGetOptionInt)(struct AdbcDatabase*, char const*,
+                                         int64_t*, struct AdbcError*);
+  AdbcStatusCode (*DatabaseSetOptionBytes)(struct AdbcDatabase*, char const*,
+                                           uint8_t const*, size_t,
+                                           struct AdbcError*);
+  AdbcStatusCode (*DatabaseSetOptionDouble)(struct AdbcDatabase*, char const*,
+                                            double, struct AdbcError*);
+  AdbcStatusCode (*DatabaseSetOptionInt)(struct AdbcDatabase*, char const*,
+                                         int64_t, struct AdbcError*);
 
   AdbcStatusCode (*ConnectionCancel)(struct AdbcConnection*, struct AdbcError*);
-  AdbcStatusCode (*ConnectionGetOption)(struct AdbcConnection*, const char*, char*,
-                                        size_t*, struct AdbcError*);
-  AdbcStatusCode (*ConnectionGetOptionBytes)(struct AdbcConnection*, const char*,
-                                             uint8_t*, size_t*, struct AdbcError*);
-  AdbcStatusCode (*ConnectionGetOptionDouble)(struct AdbcConnection*, const char*,
-                                              double*, struct AdbcError*);
-  AdbcStatusCode (*ConnectionGetOptionInt)(struct AdbcConnection*, const char*, int64_t*,
-                                           struct AdbcError*);
-  AdbcStatusCode (*ConnectionGetStatistics)(struct AdbcConnection*, const char*,
-                                            const char*, const char*, char,
-                                            struct ArrowArrayStream*, struct AdbcError*);
+  AdbcStatusCode (*ConnectionGetOption)(struct AdbcConnection*, char const*,
+                                        char*, size_t*, struct AdbcError*);
+  AdbcStatusCode (*ConnectionGetOptionBytes)(struct AdbcConnection*,
+                                             char const*, uint8_t*, size_t*,
+                                             struct AdbcError*);
+  AdbcStatusCode (*ConnectionGetOptionDouble)(struct AdbcConnection*,
+                                              char const*, double*,
+                                              struct AdbcError*);
+  AdbcStatusCode (*ConnectionGetOptionInt)(struct AdbcConnection*, char const*,
+                                           int64_t*, struct AdbcError*);
+  AdbcStatusCode (*ConnectionGetStatistics)(struct AdbcConnection*, char const*,
+                                            char const*, char const*, char,
+                                            struct ArrowArrayStream*,
+                                            struct AdbcError*);
   AdbcStatusCode (*ConnectionGetStatisticNames)(struct AdbcConnection*,
                                                 struct ArrowArrayStream*,
                                                 struct AdbcError*);
-  AdbcStatusCode (*ConnectionSetOptionBytes)(struct AdbcConnection*, const char*,
-                                             const uint8_t*, size_t, struct AdbcError*);
-  AdbcStatusCode (*ConnectionSetOptionDouble)(struct AdbcConnection*, const char*, double,
+  AdbcStatusCode (*ConnectionSetOptionBytes)(struct AdbcConnection*,
+                                             char const*, uint8_t const*,
+                                             size_t, struct AdbcError*);
+  AdbcStatusCode (*ConnectionSetOptionDouble)(struct AdbcConnection*,
+                                              char const*, double,
                                               struct AdbcError*);
-  AdbcStatusCode (*ConnectionSetOptionInt)(struct AdbcConnection*, const char*, int64_t,
-                                           struct AdbcError*);
+  AdbcStatusCode (*ConnectionSetOptionInt)(struct AdbcConnection*, char const*,
+                                           int64_t, struct AdbcError*);
 
   AdbcStatusCode (*StatementCancel)(struct AdbcStatement*, struct AdbcError*);
-  AdbcStatusCode (*StatementExecuteSchema)(struct AdbcStatement*, struct ArrowSchema*,
+  AdbcStatusCode (*StatementExecuteSchema)(struct AdbcStatement*,
+                                           struct ArrowSchema*,
                                            struct AdbcError*);
-  AdbcStatusCode (*StatementGetOption)(struct AdbcStatement*, const char*, char*, size_t*,
-                                       struct AdbcError*);
-  AdbcStatusCode (*StatementGetOptionBytes)(struct AdbcStatement*, const char*, uint8_t*,
-                                            size_t*, struct AdbcError*);
-  AdbcStatusCode (*StatementGetOptionDouble)(struct AdbcStatement*, const char*, double*,
-                                             struct AdbcError*);
-  AdbcStatusCode (*StatementGetOptionInt)(struct AdbcStatement*, const char*, int64_t*,
-                                          struct AdbcError*);
-  AdbcStatusCode (*StatementSetOptionBytes)(struct AdbcStatement*, const char*,
-                                            const uint8_t*, size_t, struct AdbcError*);
-  AdbcStatusCode (*StatementSetOptionDouble)(struct AdbcStatement*, const char*, double,
-                                             struct AdbcError*);
-  AdbcStatusCode (*StatementSetOptionInt)(struct AdbcStatement*, const char*, int64_t,
-                                          struct AdbcError*);
+  AdbcStatusCode (*StatementGetOption)(struct AdbcStatement*, char const*,
+                                       char*, size_t*, struct AdbcError*);
+  AdbcStatusCode (*StatementGetOptionBytes)(struct AdbcStatement*, char const*,
+                                            uint8_t*, size_t*,
+                                            struct AdbcError*);
+  AdbcStatusCode (*StatementGetOptionDouble)(struct AdbcStatement*, char const*,
+                                             double*, struct AdbcError*);
+  AdbcStatusCode (*StatementGetOptionInt)(struct AdbcStatement*, char const*,
+                                          int64_t*, struct AdbcError*);
+  AdbcStatusCode (*StatementSetOptionBytes)(struct AdbcStatement*, char const*,
+                                            uint8_t const*, size_t,
+                                            struct AdbcError*);
+  AdbcStatusCode (*StatementSetOptionDouble)(struct AdbcStatement*, char const*,
+                                             double, struct AdbcError*);
+  AdbcStatusCode (*StatementSetOptionInt)(struct AdbcStatement*, char const*,
+                                          int64_t, struct AdbcError*);
 
   /// @}
 };
@@ -1143,7 +1178,8 @@ struct ADBC_EXPORT AdbcDriver {
 /// ADBC_VERSION_1_0_0.
 ///
 /// \since ADBC API revision 1.1.0
-#define ADBC_DRIVER_1_0_0_SIZE (offsetof(struct AdbcDriver, ErrorGetDetailCount))
+#define ADBC_DRIVER_1_0_0_SIZE \
+  (offsetof(struct AdbcDriver, ErrorGetDetailCount))
 
 /// \brief The size of the AdbcDriver structure in ADBC 1.1.0.
 /// Drivers written for ADBC 1.1.0 and later should never touch more
@@ -1162,11 +1198,12 @@ struct ADBC_EXPORT AdbcDriver {
 ///
 /// Callers pass in a zero-initialized AdbcDatabase.
 ///
-/// Drivers should allocate their internal data structure and set the private_data
-/// field to point to the newly allocated struct. This struct should be released
-/// when AdbcDatabaseRelease is called.
+/// Drivers should allocate their internal data structure and set the
+/// private_data field to point to the newly allocated struct. This struct
+/// should be released when AdbcDatabaseRelease is called.
 ADBC_EXPORT
-AdbcStatusCode AdbcDatabaseNew(struct AdbcDatabase* database, struct AdbcError* error);
+AdbcStatusCode AdbcDatabaseNew(struct AdbcDatabase* database,
+                               struct AdbcError* error);
 
 /// \brief Get a string option of the database.
 ///
@@ -1205,9 +1242,9 @@ AdbcStatusCode AdbcDatabaseNew(struct AdbcDatabase* database, struct AdbcError* 
 ///   message if necessary.
 /// \return ADBC_STATUS_NOT_FOUND if the option is not recognized.
 ADBC_EXPORT
-AdbcStatusCode AdbcDatabaseGetOption(struct AdbcDatabase* database, const char* key,
-                                     char* value, size_t* length,
-                                     struct AdbcError* error);
+AdbcStatusCode AdbcDatabaseGetOption(struct AdbcDatabase* database,
+                                     char const* key, char* value,
+                                     size_t* length, struct AdbcError* error);
 
 /// \brief Get a bytestring option of the database.
 ///
@@ -1245,8 +1282,9 @@ AdbcStatusCode AdbcDatabaseGetOption(struct AdbcDatabase* database, const char* 
 ///   message if necessary.
 /// \return ADBC_STATUS_NOT_FOUND if the option is not recognized.
 ADBC_EXPORT
-AdbcStatusCode AdbcDatabaseGetOptionBytes(struct AdbcDatabase* database, const char* key,
-                                          uint8_t* value, size_t* length,
+AdbcStatusCode AdbcDatabaseGetOptionBytes(struct AdbcDatabase* database,
+                                          char const* key, uint8_t* value,
+                                          size_t* length,
                                           struct AdbcError* error);
 
 /// \brief Get a double option of the database.
@@ -1269,8 +1307,9 @@ AdbcStatusCode AdbcDatabaseGetOptionBytes(struct AdbcDatabase* database, const c
 ///   message if necessary.
 /// \return ADBC_STATUS_NOT_FOUND if the option is not recognized.
 ADBC_EXPORT
-AdbcStatusCode AdbcDatabaseGetOptionDouble(struct AdbcDatabase* database, const char* key,
-                                           double* value, struct AdbcError* error);
+AdbcStatusCode AdbcDatabaseGetOptionDouble(struct AdbcDatabase* database,
+                                           char const* key, double* value,
+                                           struct AdbcError* error);
 
 /// \brief Get an integer option of the database.
 ///
@@ -1292,8 +1331,9 @@ AdbcStatusCode AdbcDatabaseGetOptionDouble(struct AdbcDatabase* database, const 
 ///   message if necessary.
 /// \return ADBC_STATUS_NOT_FOUND if the option is not recognized.
 ADBC_EXPORT
-AdbcStatusCode AdbcDatabaseGetOptionInt(struct AdbcDatabase* database, const char* key,
-                                        int64_t* value, struct AdbcError* error);
+AdbcStatusCode AdbcDatabaseGetOptionInt(struct AdbcDatabase* database,
+                                        char const* key, int64_t* value,
+                                        struct AdbcError* error);
 
 /// \brief Set a char* option.
 ///
@@ -1312,8 +1352,9 @@ AdbcStatusCode AdbcDatabaseGetOptionInt(struct AdbcDatabase* database, const cha
 ///   message if necessary.
 /// \return ADBC_STATUS_NOT_IMPLEMENTED if the option is not recognized
 ADBC_EXPORT
-AdbcStatusCode AdbcDatabaseSetOption(struct AdbcDatabase* database, const char* key,
-                                     const char* value, struct AdbcError* error);
+AdbcStatusCode AdbcDatabaseSetOption(struct AdbcDatabase* database,
+                                     char const* key, char const* value,
+                                     struct AdbcError* error);
 
 /// \brief Set a bytestring option on a database.
 ///
@@ -1326,8 +1367,9 @@ AdbcStatusCode AdbcDatabaseSetOption(struct AdbcDatabase* database, const char* 
 ///   message if necessary.
 /// \return ADBC_STATUS_NOT_IMPLEMENTED if the option is not recognized
 ADBC_EXPORT
-AdbcStatusCode AdbcDatabaseSetOptionBytes(struct AdbcDatabase* database, const char* key,
-                                          const uint8_t* value, size_t length,
+AdbcStatusCode AdbcDatabaseSetOptionBytes(struct AdbcDatabase* database,
+                                          char const* key, uint8_t const* value,
+                                          size_t length,
                                           struct AdbcError* error);
 
 /// \brief Set a double option on a database.
@@ -1340,8 +1382,9 @@ AdbcStatusCode AdbcDatabaseSetOptionBytes(struct AdbcDatabase* database, const c
 ///   message if necessary.
 /// \return ADBC_STATUS_NOT_IMPLEMENTED if the option is not recognized
 ADBC_EXPORT
-AdbcStatusCode AdbcDatabaseSetOptionDouble(struct AdbcDatabase* database, const char* key,
-                                           double value, struct AdbcError* error);
+AdbcStatusCode AdbcDatabaseSetOptionDouble(struct AdbcDatabase* database,
+                                           char const* key, double value,
+                                           struct AdbcError* error);
 
 /// \brief Set an integer option on a database.
 ///
@@ -1353,15 +1396,17 @@ AdbcStatusCode AdbcDatabaseSetOptionDouble(struct AdbcDatabase* database, const 
 ///   message if necessary.
 /// \return ADBC_STATUS_NOT_IMPLEMENTED if the option is not recognized
 ADBC_EXPORT
-AdbcStatusCode AdbcDatabaseSetOptionInt(struct AdbcDatabase* database, const char* key,
-                                        int64_t value, struct AdbcError* error);
+AdbcStatusCode AdbcDatabaseSetOptionInt(struct AdbcDatabase* database,
+                                        char const* key, int64_t value,
+                                        struct AdbcError* error);
 
 /// \brief Finish setting options and initialize the database.
 ///
 /// Some drivers may support setting options after initialization
 /// as well.
 ADBC_EXPORT
-AdbcStatusCode AdbcDatabaseInit(struct AdbcDatabase* database, struct AdbcError* error);
+AdbcStatusCode AdbcDatabaseInit(struct AdbcDatabase* database,
+                                struct AdbcError* error);
 
 /// \brief Destroy this database. No connections may exist.
 /// \param[in] database The database to release.
@@ -1380,9 +1425,9 @@ AdbcStatusCode AdbcDatabaseRelease(struct AdbcDatabase* database,
 ///
 /// Callers pass in a zero-initialized AdbcConnection.
 ///
-/// Drivers should allocate their internal data structure and set the private_data
-/// field to point to the newly allocated struct. This struct should be released
-/// when AdbcConnectionRelease is called.
+/// Drivers should allocate their internal data structure and set the
+/// private_data field to point to the newly allocated struct. This struct
+/// should be released when AdbcConnectionRelease is called.
 ADBC_EXPORT
 AdbcStatusCode AdbcConnectionNew(struct AdbcConnection* connection,
                                  struct AdbcError* error);
@@ -1399,8 +1444,9 @@ AdbcStatusCode AdbcConnectionNew(struct AdbcConnection* connection,
 ///   message if necessary.
 /// \return ADBC_STATUS_NOT_IMPLEMENTED if the option is not recognized
 ADBC_EXPORT
-AdbcStatusCode AdbcConnectionSetOption(struct AdbcConnection* connection, const char* key,
-                                       const char* value, struct AdbcError* error);
+AdbcStatusCode AdbcConnectionSetOption(struct AdbcConnection* connection,
+                                       char const* key, char const* value,
+                                       struct AdbcError* error);
 
 /// \brief Set a bytestring option on a connection.
 ///
@@ -1414,8 +1460,9 @@ AdbcStatusCode AdbcConnectionSetOption(struct AdbcConnection* connection, const 
 /// \return ADBC_STATUS_NOT_IMPLEMENTED if the option is not recognized
 ADBC_EXPORT
 AdbcStatusCode AdbcConnectionSetOptionBytes(struct AdbcConnection* connection,
-                                            const char* key, const uint8_t* value,
-                                            size_t length, struct AdbcError* error);
+                                            char const* key,
+                                            uint8_t const* value, size_t length,
+                                            struct AdbcError* error);
 
 /// \brief Set an integer option.
 ///
@@ -1431,7 +1478,7 @@ AdbcStatusCode AdbcConnectionSetOptionBytes(struct AdbcConnection* connection,
 /// \return ADBC_STATUS_NOT_IMPLEMENTED if the option is not recognized
 ADBC_EXPORT
 AdbcStatusCode AdbcConnectionSetOptionInt(struct AdbcConnection* connection,
-                                          const char* key, int64_t value,
+                                          char const* key, int64_t value,
                                           struct AdbcError* error);
 
 /// \brief Set a double option.
@@ -1448,7 +1495,7 @@ AdbcStatusCode AdbcConnectionSetOptionInt(struct AdbcConnection* connection,
 /// \return ADBC_STATUS_NOT_IMPLEMENTED if the option is not recognized
 ADBC_EXPORT
 AdbcStatusCode AdbcConnectionSetOptionDouble(struct AdbcConnection* connection,
-                                             const char* key, double value,
+                                             char const* key, double value,
                                              struct AdbcError* error);
 
 /// \brief Finish setting options and initialize the connection.
@@ -1457,7 +1504,8 @@ AdbcStatusCode AdbcConnectionSetOptionDouble(struct AdbcConnection* connection,
 /// as well.
 ADBC_EXPORT
 AdbcStatusCode AdbcConnectionInit(struct AdbcConnection* connection,
-                                  struct AdbcDatabase* database, struct AdbcError* error);
+                                  struct AdbcDatabase* database,
+                                  struct AdbcError* error);
 
 /// \brief Destroy this connection.
 ///
@@ -1554,7 +1602,8 @@ AdbcStatusCode AdbcConnectionCancel(struct AdbcConnection* connection,
 /// \param[out] error Error details, if an error occurs.
 ADBC_EXPORT
 AdbcStatusCode AdbcConnectionGetInfo(struct AdbcConnection* connection,
-                                     const uint32_t* info_codes, size_t info_codes_length,
+                                     uint32_t const* info_codes,
+                                     size_t info_codes_length,
                                      struct ArrowArrayStream* out,
                                      struct AdbcError* error);
 
@@ -1663,12 +1712,11 @@ AdbcStatusCode AdbcConnectionGetInfo(struct AdbcConnection* connection,
 /// \param[out] out The result set.
 /// \param[out] error Error details, if an error occurs.
 ADBC_EXPORT
-AdbcStatusCode AdbcConnectionGetObjects(struct AdbcConnection* connection, int depth,
-                                        const char* catalog, const char* db_schema,
-                                        const char* table_name, const char** table_type,
-                                        const char* column_name,
-                                        struct ArrowArrayStream* out,
-                                        struct AdbcError* error);
+AdbcStatusCode AdbcConnectionGetObjects(
+    struct AdbcConnection* connection, int depth, char const* catalog,
+    char const* db_schema, char const* table_name, char const** table_type,
+    char const* column_name, struct ArrowArrayStream* out,
+    struct AdbcError* error);
 
 /// \brief Get a string option of the connection.
 ///
@@ -1699,9 +1747,9 @@ AdbcStatusCode AdbcConnectionGetObjects(struct AdbcConnection* connection, int d
 ///   message if necessary.
 /// \return ADBC_STATUS_NOT_FOUND if the option is not recognized.
 ADBC_EXPORT
-AdbcStatusCode AdbcConnectionGetOption(struct AdbcConnection* connection, const char* key,
-                                       char* value, size_t* length,
-                                       struct AdbcError* error);
+AdbcStatusCode AdbcConnectionGetOption(struct AdbcConnection* connection,
+                                       char const* key, char* value,
+                                       size_t* length, struct AdbcError* error);
 
 /// \brief Get a bytestring option of the connection.
 ///
@@ -1740,8 +1788,9 @@ AdbcStatusCode AdbcConnectionGetOption(struct AdbcConnection* connection, const 
 /// \return ADBC_STATUS_NOT_FOUND if the option is not recognized.
 ADBC_EXPORT
 AdbcStatusCode AdbcConnectionGetOptionBytes(struct AdbcConnection* connection,
-                                            const char* key, uint8_t* value,
-                                            size_t* length, struct AdbcError* error);
+                                            char const* key, uint8_t* value,
+                                            size_t* length,
+                                            struct AdbcError* error);
 
 /// \brief Get an integer option of the connection.
 ///
@@ -1764,7 +1813,7 @@ AdbcStatusCode AdbcConnectionGetOptionBytes(struct AdbcConnection* connection,
 /// \return ADBC_STATUS_NOT_FOUND if the option is not recognized.
 ADBC_EXPORT
 AdbcStatusCode AdbcConnectionGetOptionInt(struct AdbcConnection* connection,
-                                          const char* key, int64_t* value,
+                                          char const* key, int64_t* value,
                                           struct AdbcError* error);
 
 /// \brief Get a double option of the connection.
@@ -1788,7 +1837,7 @@ AdbcStatusCode AdbcConnectionGetOptionInt(struct AdbcConnection* connection,
 /// \return ADBC_STATUS_NOT_FOUND if the option is not recognized.
 ADBC_EXPORT
 AdbcStatusCode AdbcConnectionGetOptionDouble(struct AdbcConnection* connection,
-                                             const char* key, double* value,
+                                             char const* key, double* value,
                                              struct AdbcError* error);
 
 /// \brief Get statistics about the data distribution of table(s).
@@ -1852,11 +1901,10 @@ AdbcStatusCode AdbcConnectionGetOptionDouble(struct AdbcConnection* connection,
 /// \param[out] out The result set.
 /// \param[out] error Error details, if an error occurs.
 ADBC_EXPORT
-AdbcStatusCode AdbcConnectionGetStatistics(struct AdbcConnection* connection,
-                                           const char* catalog, const char* db_schema,
-                                           const char* table_name, char approximate,
-                                           struct ArrowArrayStream* out,
-                                           struct AdbcError* error);
+AdbcStatusCode AdbcConnectionGetStatistics(
+    struct AdbcConnection* connection, char const* catalog,
+    char const* db_schema, char const* table_name, char approximate,
+    struct ArrowArrayStream* out, struct AdbcError* error);
 
 /// \brief Get the names of statistics specific to this driver.
 ///
@@ -1872,9 +1920,9 @@ AdbcStatusCode AdbcConnectionGetStatistics(struct AdbcConnection* connection,
 /// \param[out] out The result set.
 /// \param[out] error Error details, if an error occurs.
 ADBC_EXPORT
-AdbcStatusCode AdbcConnectionGetStatisticNames(struct AdbcConnection* connection,
-                                               struct ArrowArrayStream* out,
-                                               struct AdbcError* error);
+AdbcStatusCode AdbcConnectionGetStatisticNames(
+    struct AdbcConnection* connection, struct ArrowArrayStream* out,
+    struct AdbcError* error);
 
 /// \brief Get the Arrow schema of a table.
 ///
@@ -1886,8 +1934,9 @@ AdbcStatusCode AdbcConnectionGetStatisticNames(struct AdbcConnection* connection
 /// \param[out] error Error details, if an error occurs.
 ADBC_EXPORT
 AdbcStatusCode AdbcConnectionGetTableSchema(struct AdbcConnection* connection,
-                                            const char* catalog, const char* db_schema,
-                                            const char* table_name,
+                                            char const* catalog,
+                                            char const* db_schema,
+                                            char const* table_name,
                                             struct ArrowSchema* schema,
                                             struct AdbcError* error);
 
@@ -1939,7 +1988,7 @@ AdbcStatusCode AdbcConnectionGetTableTypes(struct AdbcConnection* connection,
 /// \param[out] error Error details, if an error occurs.
 ADBC_EXPORT
 AdbcStatusCode AdbcConnectionReadPartition(struct AdbcConnection* connection,
-                                           const uint8_t* serialized_partition,
+                                           uint8_t const* serialized_partition,
                                            size_t serialized_length,
                                            struct ArrowArrayStream* out,
                                            struct AdbcError* error);
@@ -1983,12 +2032,13 @@ AdbcStatusCode AdbcConnectionRollback(struct AdbcConnection* connection,
 ///
 /// Callers pass in a zero-initialized AdbcStatement.
 ///
-/// Drivers should allocate their internal data structure and set the private_data
-/// field to point to the newly allocated struct. This struct should be released
-/// when AdbcStatementRelease is called.
+/// Drivers should allocate their internal data structure and set the
+/// private_data field to point to the newly allocated struct. This struct
+/// should be released when AdbcStatementRelease is called.
 ADBC_EXPORT
 AdbcStatusCode AdbcStatementNew(struct AdbcConnection* connection,
-                                struct AdbcStatement* statement, struct AdbcError* error);
+                                struct AdbcStatement* statement,
+                                struct AdbcError* error);
 
 /// \brief Destroy a statement.
 /// \param[in] statement The statement to release.
@@ -2016,7 +2066,8 @@ AdbcStatusCode AdbcStatementRelease(struct AdbcStatement* statement,
 ADBC_EXPORT
 AdbcStatusCode AdbcStatementExecuteQuery(struct AdbcStatement* statement,
                                          struct ArrowArrayStream* out,
-                                         int64_t* rows_affected, struct AdbcError* error);
+                                         int64_t* rows_affected,
+                                         struct AdbcError* error);
 
 /// \brief Get the schema of the result set of a query without
 ///   executing it.
@@ -2065,7 +2116,8 @@ AdbcStatusCode AdbcStatementPrepare(struct AdbcStatement* statement,
 /// \param[out] error Error details, if an error occurs.
 ADBC_EXPORT
 AdbcStatusCode AdbcStatementSetSqlQuery(struct AdbcStatement* statement,
-                                        const char* query, struct AdbcError* error);
+                                        char const* query,
+                                        struct AdbcError* error);
 
 /// @}
 
@@ -2088,7 +2140,7 @@ AdbcStatusCode AdbcStatementSetSqlQuery(struct AdbcStatement* statement,
 /// \param[out] error Error details, if an error occurs.
 ADBC_EXPORT
 AdbcStatusCode AdbcStatementSetSubstraitPlan(struct AdbcStatement* statement,
-                                             const uint8_t* plan, size_t length,
+                                             uint8_t const* plan, size_t length,
                                              struct AdbcError* error);
 
 /// @}
@@ -2105,7 +2157,8 @@ AdbcStatusCode AdbcStatementSetSubstraitPlan(struct AdbcStatement* statement,
 ///   if necessary.
 ADBC_EXPORT
 AdbcStatusCode AdbcStatementBind(struct AdbcStatement* statement,
-                                 struct ArrowArray* values, struct ArrowSchema* schema,
+                                 struct ArrowArray* values,
+                                 struct ArrowSchema* schema,
                                  struct AdbcError* error);
 
 /// \brief Bind Arrow data. This can be used for bulk inserts or
@@ -2182,9 +2235,9 @@ AdbcStatusCode AdbcStatementCancel(struct AdbcStatement* statement,
 ///   message if necessary.
 /// \return ADBC_STATUS_NOT_FOUND if the option is not recognized.
 ADBC_EXPORT
-AdbcStatusCode AdbcStatementGetOption(struct AdbcStatement* statement, const char* key,
-                                      char* value, size_t* length,
-                                      struct AdbcError* error);
+AdbcStatusCode AdbcStatementGetOption(struct AdbcStatement* statement,
+                                      char const* key, char* value,
+                                      size_t* length, struct AdbcError* error);
 
 /// \brief Get a bytestring option of the statement.
 ///
@@ -2223,8 +2276,9 @@ AdbcStatusCode AdbcStatementGetOption(struct AdbcStatement* statement, const cha
 /// \return ADBC_STATUS_NOT_FOUND if the option is not recognized.
 ADBC_EXPORT
 AdbcStatusCode AdbcStatementGetOptionBytes(struct AdbcStatement* statement,
-                                           const char* key, uint8_t* value,
-                                           size_t* length, struct AdbcError* error);
+                                           char const* key, uint8_t* value,
+                                           size_t* length,
+                                           struct AdbcError* error);
 
 /// \brief Get an integer option of the statement.
 ///
@@ -2246,8 +2300,9 @@ AdbcStatusCode AdbcStatementGetOptionBytes(struct AdbcStatement* statement,
 ///   message if necessary.
 /// \return ADBC_STATUS_NOT_FOUND if the option is not recognized.
 ADBC_EXPORT
-AdbcStatusCode AdbcStatementGetOptionInt(struct AdbcStatement* statement, const char* key,
-                                         int64_t* value, struct AdbcError* error);
+AdbcStatusCode AdbcStatementGetOptionInt(struct AdbcStatement* statement,
+                                         char const* key, int64_t* value,
+                                         struct AdbcError* error);
 
 /// \brief Get a double option of the statement.
 ///
@@ -2270,7 +2325,7 @@ AdbcStatusCode AdbcStatementGetOptionInt(struct AdbcStatement* statement, const 
 /// \return ADBC_STATUS_NOT_FOUND if the option is not recognized.
 ADBC_EXPORT
 AdbcStatusCode AdbcStatementGetOptionDouble(struct AdbcStatement* statement,
-                                            const char* key, double* value,
+                                            char const* key, double* value,
                                             struct AdbcError* error);
 
 /// \brief Get the schema for bound parameters.
@@ -2301,8 +2356,9 @@ AdbcStatusCode AdbcStatementGetParameterSchema(struct AdbcStatement* statement,
 ///   message if necessary.
 /// \return ADBC_STATUS_NOT_IMPLEMENTED if the option is not recognized.
 ADBC_EXPORT
-AdbcStatusCode AdbcStatementSetOption(struct AdbcStatement* statement, const char* key,
-                                      const char* value, struct AdbcError* error);
+AdbcStatusCode AdbcStatementSetOption(struct AdbcStatement* statement,
+                                      char const* key, char const* value,
+                                      struct AdbcError* error);
 
 /// \brief Set a bytestring option on a statement.
 ///
@@ -2316,8 +2372,9 @@ AdbcStatusCode AdbcStatementSetOption(struct AdbcStatement* statement, const cha
 /// \return ADBC_STATUS_NOT_IMPLEMENTED if the option is not recognized
 ADBC_EXPORT
 AdbcStatusCode AdbcStatementSetOptionBytes(struct AdbcStatement* statement,
-                                           const char* key, const uint8_t* value,
-                                           size_t length, struct AdbcError* error);
+                                           char const* key,
+                                           uint8_t const* value, size_t length,
+                                           struct AdbcError* error);
 
 /// \brief Set an integer option on a statement.
 ///
@@ -2329,8 +2386,9 @@ AdbcStatusCode AdbcStatementSetOptionBytes(struct AdbcStatement* statement,
 ///   message if necessary.
 /// \return ADBC_STATUS_NOT_IMPLEMENTED if the option is not recognized
 ADBC_EXPORT
-AdbcStatusCode AdbcStatementSetOptionInt(struct AdbcStatement* statement, const char* key,
-                                         int64_t value, struct AdbcError* error);
+AdbcStatusCode AdbcStatementSetOptionInt(struct AdbcStatement* statement,
+                                         char const* key, int64_t value,
+                                         struct AdbcError* error);
 
 /// \brief Set a double option on a statement.
 ///
@@ -2343,7 +2401,7 @@ AdbcStatusCode AdbcStatementSetOptionInt(struct AdbcStatement* statement, const 
 /// \return ADBC_STATUS_NOT_IMPLEMENTED if the option is not recognized
 ADBC_EXPORT
 AdbcStatusCode AdbcStatementSetOptionDouble(struct AdbcStatement* statement,
-                                            const char* key, double value,
+                                            char const* key, double value,
                                             struct AdbcError* error);
 
 /// \addtogroup adbc-statement-partition

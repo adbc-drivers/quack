@@ -1,0 +1,72 @@
+# Copyright (c) 2026 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+repos:
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: 5e2fb545eba1ea9dc051f6f962d52fe8f76a9794  # frozen: v0.15.13
+  hooks:
+  - id: ruff-check
+    name: "ruff check"
+    args: ["--extend-select", "I", "--fix"]
+  - id: ruff-format
+
+- repo: https://github.com/codespell-project/codespell
+  rev: 2ccb47ff45ad361a21071a7eedda4c37e6ae8c5a  # frozen: v2.4.2
+  hooks:
+  - id: codespell
+    exclude: >
+        (?x)^(
+            .*Cargo\.toml|
+            third_party/arrow-adbc/LICENSE\.txt
+        )$
+
+- repo: https://github.com/pre-commit/mirrors-clang-format
+  rev: dd18dad857d6133e90bbe478f4f2f22ec0030269  # frozen: v22.1.5
+  hooks:
+  - id: clang-format
+    types_or: [c, c++]
+
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
+  hooks:
+  - id: check-added-large-files
+    args: ["--enforce-all"]
+  - id: check-case-conflict
+  - id: check-executables-have-shebangs
+  - id: check-yaml
+  - id: detect-private-key
+  - id: end-of-file-fixer
+    exclude: '\.sln$'
+  - id: mixed-line-ending
+    args: [--fix=lf]
+    exclude: '\.(bat|sln)$'
+  - id: trailing-whitespace
+    exclude: '\.patch$'
+
+- repo: https://github.com/pre-commit/mirrors-clang-format
+  rev: dd18dad857d6133e90bbe478f4f2f22ec0030269  # frozen: v22.1.5
+  hooks:
+    - id: clang-format
+      types_or: [c, c++]
+
+- repo: https://github.com/cheshirekow/cmake-format-precommit
+  rev: e2c2116d86a80e72e7146a06e68b7c228afc6319  # v0.6.13
+  hooks:
+  - id: cmake-format
+    args: [--in-place]
+
+- repo: https://github.com/adbc-drivers/dev
+  rev: 5acd3248e730352bbda28e5267e1694f4f207a14
+  hooks:
+  - id: rat

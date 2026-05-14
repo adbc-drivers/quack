@@ -1,3 +1,17 @@
+// Copyright (c) 2026 ADBC Drivers Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//         http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #if defined(_WIN32)
 #define ADBC_EXPORT __declspec(dllexport)
 #else
@@ -7,10 +21,6 @@
 #include <arrow-adbc/adbc.h>
 #include <duckdb.h>
 
-#include "duckdb_arrow_stream.h"
-#include "quack_uri.h"
-#include "sql_escape.h"
-
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -18,30 +28,36 @@
 #include <string>
 #include <utility>
 
+#include "duckdb_arrow_stream.h"
+#include "quack_uri.h"
+#include "sql_escape.h"
+
 extern "C" {
 AdbcStatusCode AdbcDatabaseInit(AdbcDatabase* database, AdbcError* error);
 AdbcStatusCode AdbcDatabaseNew(AdbcDatabase* database, AdbcError* error);
-AdbcStatusCode AdbcDatabaseSetOption(AdbcDatabase* database, const char* key,
-                                     const char* value, AdbcError* error);
+AdbcStatusCode AdbcDatabaseSetOption(AdbcDatabase* database, char const* key,
+                                     char const* value, AdbcError* error);
 AdbcStatusCode AdbcDatabaseRelease(AdbcDatabase* database, AdbcError* error);
-AdbcStatusCode AdbcConnectionInit(AdbcConnection* connection, AdbcDatabase* database,
-                                  AdbcError* error);
+AdbcStatusCode AdbcConnectionInit(AdbcConnection* connection,
+                                  AdbcDatabase* database, AdbcError* error);
 AdbcStatusCode AdbcConnectionNew(AdbcConnection* connection, AdbcError* error);
-AdbcStatusCode AdbcConnectionRelease(AdbcConnection* connection, AdbcError* error);
+AdbcStatusCode AdbcConnectionRelease(AdbcConnection* connection,
+                                     AdbcError* error);
 AdbcStatusCode AdbcStatementBind(AdbcStatement* statement, ArrowArray* values,
                                  ArrowSchema* schema, AdbcError* error);
 AdbcStatusCode AdbcStatementBindStream(AdbcStatement* statement,
-                                       ArrowArrayStream* stream, AdbcError* error);
+                                       ArrowArrayStream* stream,
+                                       AdbcError* error);
 AdbcStatusCode AdbcStatementExecuteQuery(AdbcStatement* statement,
                                          ArrowArrayStream* out,
                                          int64_t* rows_affected,
                                          AdbcError* error);
-AdbcStatusCode AdbcStatementNew(AdbcConnection* connection, AdbcStatement* statement,
-                                AdbcError* error);
+AdbcStatusCode AdbcStatementNew(AdbcConnection* connection,
+                                AdbcStatement* statement, AdbcError* error);
 AdbcStatusCode AdbcStatementPrepare(AdbcStatement* statement, AdbcError* error);
 AdbcStatusCode AdbcStatementRelease(AdbcStatement* statement, AdbcError* error);
-AdbcStatusCode AdbcStatementSetSqlQuery(AdbcStatement* statement, const char* query,
-                                        AdbcError* error);
+AdbcStatusCode AdbcStatementSetSqlQuery(AdbcStatement* statement,
+                                        char const* query, AdbcError* error);
 }
 
 namespace {
@@ -95,8 +111,8 @@ void ClearError(AdbcError* error) {
   error->private_driver = nullptr;
 }
 
-AdbcStatusCode SetError(AdbcError* error, AdbcStatusCode status, std::string message,
-                        int32_t vendor_code = 0) {
+AdbcStatusCode SetError(AdbcError* error, AdbcStatusCode status,
+                        std::string message, int32_t vendor_code = 0) {
   if (error == nullptr) {
     return status;
   }
@@ -132,7 +148,8 @@ AdbcStatusCode NotImplemented(AdbcError* error, std::string message) {
   return SetError(error, ADBC_STATUS_NOT_IMPLEMENTED, std::move(message));
 }
 
-AdbcStatusCode IoError(AdbcError* error, std::string message, int32_t vendor_code = 0) {
+AdbcStatusCode IoError(AdbcError* error, std::string message,
+                       int32_t vendor_code = 0) {
   return SetError(error, ADBC_STATUS_IO, std::move(message), vendor_code);
 }
 
@@ -180,15 +197,17 @@ void CloseConnectionState(ConnectionState* state) {
   state->initialized = false;
 }
 
-AdbcStatusCode RunDuckDbQuery(ConnectionState* state, const std::string& sql,
+AdbcStatusCode RunDuckDbQuery(ConnectionState* state, std::string const& sql,
                               AdbcError* error) {
   duckdb_result result;
-  const duckdb_state query_state =
+  duckdb_state const query_state =
       duckdb_query(state->connection, sql.c_str(), &result);
   if (query_state == DuckDBError) {
-    const char* result_error = duckdb_result_error(&result);
-    std::string message = result_error != nullptr ? result_error : "DuckDB query failed";
-    const auto error_type = static_cast<int32_t>(duckdb_result_error_type(&result));
+    char const* result_error = duckdb_result_error(&result);
+    std::string message =
+        result_error != nullptr ? result_error : "DuckDB query failed";
+    auto const error_type =
+        static_cast<int32_t>(duckdb_result_error_type(&result));
     duckdb_destroy_result(&result);
     return IoError(error, std::move(message), error_type);
   }
@@ -207,7 +226,8 @@ AdbcStatusCode InitDriver(int version, void* raw_driver, AdbcError* error) {
   auto* driver = static_cast<AdbcDriver*>(raw_driver);
   auto* driver_state = new (std::nothrow) DriverState{version};
   if (driver_state == nullptr) {
-    return SetError(error, ADBC_STATUS_UNKNOWN, "failed to allocate driver state");
+    return SetError(error, ADBC_STATUS_UNKNOWN,
+                    "failed to allocate driver state");
   }
   driver->private_data = driver_state;
   driver->release = ReleaseDriver;
@@ -245,14 +265,15 @@ AdbcStatusCode AdbcDatabaseNew(AdbcDatabase* database, AdbcError* error) {
   return Ok(error);
 }
 
-AdbcStatusCode AdbcDatabaseSetOption(AdbcDatabase* database, const char* key,
-                                     const char* value, AdbcError* error) {
+AdbcStatusCode AdbcDatabaseSetOption(AdbcDatabase* database, char const* key,
+                                     char const* value, AdbcError* error) {
   DatabaseState* state = GetDatabase(database);
   if (state == nullptr) {
     return InvalidState(error, "database is not initialized");
   }
   if (key == nullptr || value == nullptr) {
-    return InvalidArgument(error, "database option key and value must not be null");
+    return InvalidArgument(error,
+                           "database option key and value must not be null");
   }
   if (std::strcmp(key, "uri") != 0) {
     return NotImplemented(error, "unsupported database option");
@@ -298,8 +319,8 @@ AdbcStatusCode AdbcConnectionNew(AdbcConnection* connection, AdbcError* error) {
   return Ok(error);
 }
 
-AdbcStatusCode AdbcConnectionInit(AdbcConnection* connection, AdbcDatabase* database,
-                                  AdbcError* error) {
+AdbcStatusCode AdbcConnectionInit(AdbcConnection* connection,
+                                  AdbcDatabase* database, AdbcError* error) {
   ConnectionState* connection_state = GetConnection(connection);
   DatabaseState* database_state = GetDatabase(database);
   if (connection_state == nullptr) {
@@ -312,8 +333,8 @@ AdbcStatusCode AdbcConnectionInit(AdbcConnection* connection, AdbcDatabase* data
   if (duckdb_open(nullptr, &connection_state->database) == DuckDBError) {
     return IoError(error, "failed to open local DuckDB client");
   }
-  if (duckdb_connect(connection_state->database, &connection_state->connection) ==
-      DuckDBError) {
+  if (duckdb_connect(connection_state->database,
+                     &connection_state->connection) == DuckDBError) {
     CloseConnectionState(connection_state);
     return IoError(error, "failed to connect local DuckDB client");
   }
@@ -325,10 +346,10 @@ AdbcStatusCode AdbcConnectionInit(AdbcConnection* connection, AdbcDatabase* data
   }
 
   if (!database_state->parsed_uri.token.empty()) {
-    const std::string create_secret =
-        "CREATE SECRET (TYPE quack, TOKEN " +
-        adbc_driver_quack::DuckDbSqlStringLiteral(database_state->parsed_uri.token) +
-        ")";
+    std::string const create_secret = "CREATE SECRET (TYPE quack, TOKEN " +
+                                      adbc_driver_quack::DuckDbSqlStringLiteral(
+                                          database_state->parsed_uri.token) +
+                                      ")";
     status = RunDuckDbQuery(connection_state, create_secret, error);
     if (status != ADBC_STATUS_OK) {
       CloseConnectionState(connection_state);
@@ -336,10 +357,10 @@ AdbcStatusCode AdbcConnectionInit(AdbcConnection* connection, AdbcDatabase* data
     }
   }
 
-  const std::string attach =
-      "ATTACH " +
-      adbc_driver_quack::DuckDbSqlStringLiteral(database_state->parsed_uri.endpoint) +
-      " AS remote";
+  std::string const attach = "ATTACH " +
+                             adbc_driver_quack::DuckDbSqlStringLiteral(
+                                 database_state->parsed_uri.endpoint) +
+                             " AS remote";
   status = RunDuckDbQuery(connection_state, attach, error);
   if (status != ADBC_STATUS_OK) {
     CloseConnectionState(connection_state);
@@ -350,7 +371,8 @@ AdbcStatusCode AdbcConnectionInit(AdbcConnection* connection, AdbcDatabase* data
   return Ok(error);
 }
 
-AdbcStatusCode AdbcConnectionRelease(AdbcConnection* connection, AdbcError* error) {
+AdbcStatusCode AdbcConnectionRelease(AdbcConnection* connection,
+                                     AdbcError* error) {
   if (connection == nullptr) {
     return Ok(error);
   }
@@ -362,8 +384,8 @@ AdbcStatusCode AdbcConnectionRelease(AdbcConnection* connection, AdbcError* erro
   return Ok(error);
 }
 
-AdbcStatusCode AdbcStatementNew(AdbcConnection* connection, AdbcStatement* statement,
-                                AdbcError* error) {
+AdbcStatusCode AdbcStatementNew(AdbcConnection* connection,
+                                AdbcStatement* statement, AdbcError* error) {
   if (statement == nullptr) {
     return InvalidArgument(error, "statement must not be null");
   }
@@ -376,8 +398,8 @@ AdbcStatusCode AdbcStatementNew(AdbcConnection* connection, AdbcStatement* state
   return Ok(error);
 }
 
-AdbcStatusCode AdbcStatementSetSqlQuery(AdbcStatement* statement, const char* query,
-                                        AdbcError* error) {
+AdbcStatusCode AdbcStatementSetSqlQuery(AdbcStatement* statement,
+                                        char const* query, AdbcError* error) {
   StatementState* state = GetStatement(statement);
   if (state == nullptr) {
     return InvalidState(error, "statement is not initialized");
@@ -403,9 +425,10 @@ AdbcStatusCode AdbcStatementExecuteQuery(AdbcStatement* statement,
   if (state->sql.empty()) {
     return InvalidState(error, "SQL query is not set");
   }
-  const std::string remote_sql = adbc_driver_quack::BuildRemoteQuerySql(state->sql);
+  std::string const remote_sql =
+      adbc_driver_quack::BuildRemoteQuerySql(state->sql);
   if (out != nullptr) {
-    const auto result = adbc_driver_quack::ExecuteDuckDbArrowQuery(
+    auto const result = adbc_driver_quack::ExecuteDuckDbArrowQuery(
         state->connection->connection, remote_sql, out, rows_affected);
     if (result.status != ADBC_STATUS_OK) {
       return SetError(error, result.status, result.message, result.vendor_code);
@@ -413,7 +436,8 @@ AdbcStatusCode AdbcStatementExecuteQuery(AdbcStatement* statement,
     return Ok(error);
   }
 
-  const AdbcStatusCode status = RunDuckDbQuery(state->connection, remote_sql, error);
+  AdbcStatusCode const status =
+      RunDuckDbQuery(state->connection, remote_sql, error);
   if (status == ADBC_STATUS_OK && rows_affected != nullptr) {
     *rows_affected = -1;
   }
@@ -434,7 +458,8 @@ AdbcStatusCode AdbcStatementBindStream(AdbcStatement*, ArrowArrayStream*,
   return NotImplemented(error, "parameter binding is not implemented");
 }
 
-AdbcStatusCode AdbcStatementRelease(AdbcStatement* statement, AdbcError* error) {
+AdbcStatusCode AdbcStatementRelease(AdbcStatement* statement,
+                                    AdbcError* error) {
   if (statement == nullptr) {
     return Ok(error);
   }
