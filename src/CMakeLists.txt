@@ -3,6 +3,24 @@ add_library(adbc_driver_quack_helpers STATIC
   quack_uri.cc
   sql_escape.cc)
 
+set(ADBC_DRIVER_QUACK_DUCKDB_LIBRARIES)
+if(TARGET duckdb_generated_extension_loader)
+  list(APPEND ADBC_DRIVER_QUACK_DUCKDB_LIBRARIES
+    "$<LINK_LIBRARY:WHOLE_ARCHIVE,duckdb_generated_extension_loader>")
+endif()
+foreach(extension_target
+    quack_extension
+    json_extension
+    autocomplete_extension
+    httpfs_extension
+    core_functions_extension
+    jemalloc_extension)
+  if(TARGET ${extension_target})
+    list(APPEND ADBC_DRIVER_QUACK_DUCKDB_LIBRARIES ${extension_target})
+  endif()
+endforeach()
+list(APPEND ADBC_DRIVER_QUACK_DUCKDB_LIBRARIES duckdb_static)
+
 target_include_directories(adbc_driver_quack_helpers
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -11,7 +29,7 @@ target_include_directories(adbc_driver_quack_helpers
 
 target_link_libraries(adbc_driver_quack_helpers
   PUBLIC
-    duckdb_static
+    ${ADBC_DRIVER_QUACK_DUCKDB_LIBRARIES}
     uriparser)
 
 set_target_properties(adbc_driver_quack_helpers PROPERTIES
@@ -23,8 +41,7 @@ add_library(adbc_driver_quack SHARED
 
 target_link_libraries(adbc_driver_quack
   PRIVATE
-    adbc_driver_quack_helpers
-    duckdb_static)
+    adbc_driver_quack_helpers)
 
 target_include_directories(adbc_driver_quack
   PUBLIC

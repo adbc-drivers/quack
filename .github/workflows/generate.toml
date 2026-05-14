@@ -1,0 +1,13 @@
+#:schema https://raw.githubusercontent.com/adbc-drivers/dev/refs/heads/main/schema/generate-schema.json
+
+driver = "quack"
+private = false
+
+[lang.script]
+subdir = "."
+
+[lang.script.build]
+additional-make-args = ["TOOLCHAIN=cpp"]
+
+[lang.script.validation]
+skip = true
