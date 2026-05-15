@@ -27,6 +27,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+find_package(ZLIB REQUIRED GLOBAL)
+find_package(OpenSSL REQUIRED GLOBAL)
+find_package(CURL REQUIRED GLOBAL)
+
 FetchContent_Declare(
   duckdb
   GIT_REPOSITORY https://github.com/duckdb/duckdb.git
