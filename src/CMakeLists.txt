@@ -12,8 +12,9 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-add_library(adbc_driver_quack_helpers STATIC duckdb_arrow_stream.cc
-                                             quack_uri.cc sql_escape.cc)
+add_library(
+  adbc_driver_quack_helpers STATIC duckdb_arrow_stream.cc get_info_stream.cc
+                                   quack_uri.cc sql_escape.cc)
 
 set(ADBC_DRIVER_QUACK_DUCKDB_LIBRARIES)
 if(TARGET duckdb_generated_extension_loader)
@@ -33,10 +34,13 @@ target_include_directories(
   adbc_driver_quack_helpers
   PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
          ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/arrow-adbc/include
-         ${ADBC_DRIVER_QUACK_DUCKDB_INCLUDE_DIR})
+         ${ADBC_DRIVER_QUACK_DUCKDB_INCLUDE_DIR}
+         ${CMAKE_CURRENT_BINARY_DIR}/../generated)
 
-target_link_libraries(adbc_driver_quack_helpers
-                      PUBLIC ${ADBC_DRIVER_QUACK_DUCKDB_LIBRARIES} uriparser)
+target_link_libraries(
+  adbc_driver_quack_helpers
+  PUBLIC ${ADBC_DRIVER_QUACK_DUCKDB_LIBRARIES} uriparser
+  PRIVATE nanoarrow_static)
 
 set_target_properties(
   adbc_driver_quack_helpers PROPERTIES CXX_VISIBILITY_PRESET hidden
