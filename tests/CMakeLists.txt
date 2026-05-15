@@ -44,4 +44,13 @@ target_compile_definitions(
   adbc_driver_quack_driver_tests
   PRIVATE ADBC_DRIVER_QUACK_LIBRARY_PATH="$<TARGET_FILE:adbc_driver_quack>")
 
+if(WIN32)
+  add_custom_command(
+    TARGET adbc_driver_quack_driver_tests
+    POST_BUILD
+    COMMAND
+      ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:adbc_driver_quack>
+      $<TARGET_FILE_DIR:adbc_driver_quack_driver_tests>)
+endif()
+
 gtest_discover_tests(adbc_driver_quack_driver_tests)
