@@ -18,7 +18,7 @@
 extern "C" AdbcStatusCode AdbcDriverInit(int version, void* driver,
                                          AdbcError* error);
 
-TEST(AdbcDriverTest, ParameterBindingApisReturnNotImplemented) {
+TEST(AdbcDriverTest, UnsupportedStatementApisReturnNotImplemented) {
   AdbcStatement statement = {};
   AdbcError error = ADBC_ERROR_INIT;
 
@@ -26,8 +26,14 @@ TEST(AdbcDriverTest, ParameterBindingApisReturnNotImplemented) {
             ADBC_STATUS_NOT_IMPLEMENTED);
   EXPECT_EQ(AdbcStatementBind(&statement, nullptr, nullptr, &error),
             ADBC_STATUS_NOT_IMPLEMENTED);
+}
+
+TEST(AdbcDriverTest, BindStreamRejectsUninitializedStatement) {
+  AdbcStatement statement = {};
+  AdbcError error = ADBC_ERROR_INIT;
+
   EXPECT_EQ(AdbcStatementBindStream(&statement, nullptr, &error),
-            ADBC_STATUS_NOT_IMPLEMENTED);
+            ADBC_STATUS_INVALID_STATE);
 }
 
 TEST(AdbcDriverTest, DatabaseInitHandlesManagerExtendedError) {

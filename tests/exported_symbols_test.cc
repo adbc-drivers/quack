@@ -62,14 +62,23 @@ TEST(ExportedSymbolsTest, ExportsRequiredAdbcEntryPoints) {
   ASSERT_NE(library, nullptr);
 
   char const* symbols[] = {
-      "AdbcDatabaseNew",           "AdbcDatabaseSetOption",
-      "AdbcDatabaseInit",          "AdbcDatabaseRelease",
-      "AdbcConnectionNew",         "AdbcConnectionInit",
-      "AdbcConnectionGetInfo",     "AdbcConnectionRelease",
-      "AdbcStatementNew",          "AdbcStatementSetSqlQuery",
-      "AdbcStatementExecuteQuery", "AdbcStatementPrepare",
-      "AdbcStatementBind",         "AdbcStatementBindStream",
-      "AdbcStatementRelease",      "AdbcDriverInit",
+      "AdbcDatabaseNew",
+      "AdbcDatabaseSetOption",
+      "AdbcDatabaseInit",
+      "AdbcDatabaseRelease",
+      "AdbcConnectionNew",
+      "AdbcConnectionInit",
+      "AdbcConnectionGetInfo",
+      "AdbcConnectionRelease",
+      "AdbcStatementNew",
+      "AdbcStatementSetSqlQuery",
+      "AdbcStatementExecuteQuery",
+      "AdbcStatementPrepare",
+      "AdbcStatementSetOption",
+      "AdbcStatementBind",
+      "AdbcStatementBindStream",
+      "AdbcStatementRelease",
+      "AdbcDriverInit",
       "AdbcDriverQuackInit",
   };
 
@@ -108,6 +117,7 @@ TEST(ExportedSymbolsTest, DriverInitFunctionsPopulateDriverTable) {
     EXPECT_NE(driver.ConnectionRelease, nullptr) << init_symbol;
     EXPECT_NE(driver.StatementNew, nullptr) << init_symbol;
     EXPECT_NE(driver.StatementSetSqlQuery, nullptr) << init_symbol;
+    EXPECT_NE(driver.StatementSetOption, nullptr) << init_symbol;
     EXPECT_NE(driver.StatementExecuteQuery, nullptr) << init_symbol;
     EXPECT_NE(driver.StatementPrepare, nullptr) << init_symbol;
     EXPECT_NE(driver.StatementBind, nullptr) << init_symbol;

@@ -21,12 +21,16 @@
 #include <arrow-adbc/adbc.h>
 #include <duckdb.h>
 
+#include <cctype>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <new>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include "duckdb_arrow_stream.h"
 #include "get_info_stream.h"
@@ -64,6 +68,9 @@ AdbcStatusCode DriverStatementPrepare(AdbcStatement* statement,
                                       AdbcError* error);
 AdbcStatusCode DriverStatementRelease(AdbcStatement* statement,
                                       AdbcError* error);
+AdbcStatusCode DriverStatementSetOption(AdbcStatement* statement,
+                                        char const* key, char const* value,
+                                        AdbcError* error);
 AdbcStatusCode DriverStatementSetSqlQuery(AdbcStatement* statement,
                                           char const* query, AdbcError* error);
 }
@@ -79,12 +86,20 @@ struct DatabaseState {
 struct ConnectionState {
   duckdb_database database = nullptr;
   duckdb_connection connection = nullptr;
+  uint64_t next_ingest_id = 0;
   bool initialized = false;
 };
 
 struct StatementState {
   ConnectionState* connection = nullptr;
   std::string sql;
+  std::string ingest_target_table;
+  std::string ingest_target_catalog;
+  std::string ingest_target_schema;
+  std::string ingest_mode = ADBC_INGEST_OPTION_MODE_CREATE;
+  bool ingest_temporary = false;
+  ArrowArrayStream bound_stream = {};
+  bool has_bound_stream = false;
 };
 
 struct DriverState {
@@ -167,6 +182,12 @@ AdbcStatusCode NotImplemented(AdbcError* error, std::string message) {
   return SetError(error, ADBC_STATUS_NOT_IMPLEMENTED, std::move(message));
 }
 
+AdbcStatusCode NotFound(AdbcError* error, std::string message,
+                        int32_t vendor_code = 0) {
+  return SetError(error, ADBC_STATUS_NOT_FOUND, std::move(message),
+                  vendor_code);
+}
+
 AdbcStatusCode IoError(AdbcError* error, std::string message,
                        int32_t vendor_code = 0) {
   return SetError(error, ADBC_STATUS_IO, std::move(message), vendor_code);
@@ -203,6 +224,51 @@ StatementState* GetStatement(AdbcStatement* statement) {
   return static_cast<StatementState*>(statement->private_data);
 }
 
+void ReleaseBoundStream(StatementState* state) {
+  if (state == nullptr || !state->has_bound_stream) {
+    return;
+  }
+  if (state->bound_stream.release != nullptr) {
+    state->bound_stream.release(&state->bound_stream);
+  }
+  state->bound_stream = {};
+  state->has_bound_stream = false;
+}
+
+std::string QuoteIdentifier(std::string_view value) {
+  std::string escaped;
+  escaped.reserve(value.size() + 2);
+  escaped.push_back('"');
+  for (char c : value) {
+    if (c == '"') {
+      escaped.push_back('"');
+    }
+    escaped.push_back(c);
+  }
+  escaped.push_back('"');
+  return escaped;
+}
+
+std::string QualifiedRemoteTableName(StatementState const* state) {
+  std::string table = "remote.";
+  table += QuoteIdentifier(state->ingest_target_schema.empty()
+                               ? std::string_view{"main"}
+                               : std::string_view{state->ingest_target_schema});
+  table += ".";
+  table += QuoteIdentifier(state->ingest_target_table);
+  return table;
+}
+
+std::string QualifiedServerTableName(StatementState const* state) {
+  std::string table;
+  if (!state->ingest_target_schema.empty()) {
+    table += QuoteIdentifier(state->ingest_target_schema);
+    table += ".";
+  }
+  table += QuoteIdentifier(state->ingest_target_table);
+  return table;
+}
+
 void CloseConnectionState(ConnectionState* state) {
   if (state == nullptr) {
     return;
@@ -232,6 +298,227 @@ AdbcStatusCode RunDuckDbQuery(ConnectionState* state, std::string const& sql,
   }
   duckdb_destroy_result(&result);
   return Ok(error);
+}
+
+AdbcStatusCode RunDuckDbQueryAllowNotFound(ConnectionState* state,
+                                           std::string const& sql,
+                                           AdbcError* error) {
+  duckdb_result result;
+  duckdb_state const query_state =
+      duckdb_query(state->connection, sql.c_str(), &result);
+  if (query_state == DuckDBError) {
+    char const* result_error = duckdb_result_error(&result);
+    std::string message =
+        result_error != nullptr ? result_error : "DuckDB query failed";
+    auto const error_type =
+        static_cast<int32_t>(duckdb_result_error_type(&result));
+    duckdb_destroy_result(&result);
+    std::string const lower_message = [&message] {
+      std::string lowered = message;
+      for (char& c : lowered) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      }
+      return lowered;
+    }();
+    if (lower_message.find("does not exist") != std::string::npos ||
+        lower_message.find("not found") != std::string::npos ||
+        lower_message.find("no such table") != std::string::npos) {
+      return NotFound(error, std::move(message), error_type);
+    }
+    return IoError(error, std::move(message), error_type);
+  }
+  duckdb_destroy_result(&result);
+  return Ok(error);
+}
+
+AdbcStatusCode RunRemoteQuery(ConnectionState* state, std::string const& sql,
+                              AdbcError* error) {
+  return RunDuckDbQuery(state, adbc_driver_quack::BuildRemoteQuerySql(sql),
+                        error);
+}
+
+AdbcStatusCode GetColumnDefinitions(ConnectionState* state,
+                                    std::string const& table_name,
+                                    std::vector<std::string>* definitions,
+                                    AdbcError* error) {
+  duckdb_result result;
+  std::string const sql =
+      "SELECT name, type FROM pragma_table_info(" +
+      adbc_driver_quack::DuckDbSqlStringLiteral(table_name) + ") ORDER BY cid";
+  duckdb_state const query_state =
+      duckdb_query(state->connection, sql.c_str(), &result);
+  if (query_state == DuckDBError) {
+    char const* result_error = duckdb_result_error(&result);
+    std::string message =
+        result_error != nullptr ? result_error : "DuckDB query failed";
+    auto const error_type =
+        static_cast<int32_t>(duckdb_result_error_type(&result));
+    duckdb_destroy_result(&result);
+    return IoError(error, std::move(message), error_type);
+  }
+
+  idx_t const column_count = duckdb_row_count(&result);
+  if (column_count == 0) {
+    duckdb_destroy_result(&result);
+    return InvalidData(error, "bulk ingest input has no columns");
+  }
+
+  definitions->clear();
+  definitions->reserve(static_cast<size_t>(column_count));
+  for (idx_t row = 0; row < column_count; row++) {
+    if (duckdb_value_is_null(&result, 0, row) ||
+        duckdb_value_is_null(&result, 1, row)) {
+      duckdb_destroy_result(&result);
+      return InvalidData(error,
+                         "bulk ingest input has invalid column metadata");
+    }
+    char* name = duckdb_value_varchar(&result, 0, row);
+    char* type = duckdb_value_varchar(&result, 1, row);
+    if (name == nullptr || type == nullptr) {
+      duckdb_free(name);
+      duckdb_free(type);
+      duckdb_destroy_result(&result);
+      return InvalidData(error,
+                         "bulk ingest input has invalid column metadata");
+    }
+    definitions->push_back(QuoteIdentifier(name) + " " + type);
+    duckdb_free(name);
+    duckdb_free(type);
+  }
+  duckdb_destroy_result(&result);
+  return Ok(error);
+}
+
+std::string JoinColumnDefinitions(std::vector<std::string> const& definitions) {
+  std::string result;
+  for (size_t i = 0; i < definitions.size(); i++) {
+    if (i != 0) {
+      result += ", ";
+    }
+    result += definitions[i];
+  }
+  return result;
+}
+
+AdbcStatusCode ExecuteBulkIngest(StatementState* state, int64_t* rows_affected,
+                                 AdbcError* error) {
+  if (state->ingest_target_table.empty()) {
+    return InvalidState(error, "bulk ingest target table is not set");
+  }
+  if (!state->ingest_target_catalog.empty() &&
+      state->ingest_target_catalog != "remote") {
+    return NotImplemented(error, "bulk ingest catalogs are not implemented");
+  }
+  if (state->ingest_temporary) {
+    return NotImplemented(error, "temporary bulk ingest is not implemented");
+  }
+  if (!state->has_bound_stream) {
+    return InvalidState(error, "bulk ingest data is not bound");
+  }
+
+  uint64_t const ingest_id = state->connection->next_ingest_id++;
+  std::string const view_name =
+      "adbc_quack_ingest_view_" + std::to_string(ingest_id);
+  std::string const data_name =
+      "adbc_quack_ingest_data_" + std::to_string(ingest_id);
+  std::string const quoted_view = QuoteIdentifier(view_name);
+  std::string const quoted_data = QuoteIdentifier(data_name);
+  if (duckdb_arrow_scan(state->connection->connection, view_name.c_str(),
+                        reinterpret_cast<duckdb_arrow_stream>(
+                            &state->bound_stream)) == DuckDBError) {
+    ReleaseBoundStream(state);
+    return IoError(error, "failed to scan Arrow stream for bulk ingest");
+  }
+
+  AdbcStatusCode status = RunDuckDbQuery(
+      state->connection,
+      "CREATE TEMP TABLE " + quoted_data + " AS SELECT * FROM " + quoted_view,
+      error);
+  RunDuckDbQuery(state->connection, "DROP VIEW IF EXISTS " + quoted_view,
+                 nullptr);
+  ReleaseBoundStream(state);
+  if (status != ADBC_STATUS_OK) {
+    RunDuckDbQuery(state->connection, "DROP TABLE IF EXISTS " + quoted_data,
+                   nullptr);
+    return status;
+  }
+
+  std::string const target = QualifiedRemoteTableName(state);
+  std::string const server_target = QualifiedServerTableName(state);
+  std::vector<std::string> column_definitions;
+  status = GetColumnDefinitions(state->connection, data_name,
+                                &column_definitions, error);
+  if (status != ADBC_STATUS_OK) {
+    RunDuckDbQuery(state->connection, "DROP TABLE IF EXISTS " + quoted_data,
+                   nullptr);
+    return status;
+  }
+  std::string const create_columns =
+      " (" + JoinColumnDefinitions(column_definitions) + ")";
+  if (state->ingest_mode == ADBC_INGEST_OPTION_MODE_CREATE) {
+    status =
+        RunRemoteQuery(state->connection,
+                       "CREATE TABLE " + server_target + create_columns, error);
+    if (status == ADBC_STATUS_OK) {
+      status = RunDuckDbQuery(state->connection,
+                              "SELECT * FROM quack_clear_cache()", error);
+    }
+    if (status == ADBC_STATUS_OK) {
+      status = RunDuckDbQuery(
+          state->connection,
+          "INSERT INTO " + target + " SELECT * FROM " + quoted_data, error);
+    }
+  } else if (state->ingest_mode == ADBC_INGEST_OPTION_MODE_APPEND) {
+    status = RunDuckDbQuery(state->connection,
+                            "SELECT * FROM quack_clear_cache()", error);
+    if (status == ADBC_STATUS_OK) {
+      status = RunDuckDbQueryAllowNotFound(
+          state->connection,
+          "INSERT INTO " + target + " SELECT * FROM " + quoted_data, error);
+    }
+  } else if (state->ingest_mode == ADBC_INGEST_OPTION_MODE_REPLACE) {
+    status = RunRemoteQuery(state->connection,
+                            "DROP TABLE IF EXISTS " + server_target, error);
+    if (status == ADBC_STATUS_OK) {
+      status = RunRemoteQuery(state->connection,
+                              "CREATE TABLE " + server_target + create_columns,
+                              error);
+    }
+    if (status == ADBC_STATUS_OK) {
+      status = RunDuckDbQuery(state->connection,
+                              "SELECT * FROM quack_clear_cache()", error);
+    }
+    if (status == ADBC_STATUS_OK) {
+      status = RunDuckDbQuery(
+          state->connection,
+          "INSERT INTO " + target + " SELECT * FROM " + quoted_data, error);
+    }
+  } else if (state->ingest_mode == ADBC_INGEST_OPTION_MODE_CREATE_APPEND) {
+    status = RunRemoteQuery(
+        state->connection,
+        "CREATE TABLE IF NOT EXISTS " + server_target + create_columns, error);
+    if (status == ADBC_STATUS_OK) {
+      status = RunDuckDbQuery(state->connection,
+                              "SELECT * FROM quack_clear_cache()", error);
+    }
+    if (status == ADBC_STATUS_OK) {
+      status = RunDuckDbQuery(
+          state->connection,
+          "INSERT INTO " + target + " SELECT * FROM " + quoted_data, error);
+    }
+  } else {
+    status = InvalidArgument(error, "unsupported bulk ingest mode");
+  }
+
+  RunDuckDbQuery(state->connection, "DROP TABLE IF EXISTS " + quoted_data,
+                 nullptr);
+  if (status == ADBC_STATUS_OK) {
+    RunDuckDbQuery(state->connection, "COMMIT", nullptr);
+  }
+  if (status == ADBC_STATUS_OK && rows_affected != nullptr) {
+    *rows_affected = -1;
+  }
+  return status;
 }
 
 AdbcStatusCode QueryRemoteVendorVersion(ConnectionState* state,
@@ -314,6 +601,7 @@ AdbcStatusCode InitDriver(int version, void* raw_driver, AdbcError* error) {
   driver->StatementNew = DriverStatementNew;
   driver->StatementPrepare = DriverStatementPrepare;
   driver->StatementRelease = DriverStatementRelease;
+  driver->StatementSetOption = DriverStatementSetOption;
   driver->StatementSetSqlQuery = DriverStatementSetSqlQuery;
 
   return Ok(error);
@@ -489,6 +777,7 @@ AdbcStatusCode DriverStatementSetSqlQuery(AdbcStatement* statement,
   if (query == nullptr) {
     return InvalidArgument(error, "SQL query must not be null");
   }
+  ReleaseBoundStream(state);
   state->sql = query;
   return Ok(error);
 }
@@ -503,6 +792,13 @@ AdbcStatusCode DriverStatementExecuteQuery(AdbcStatement* statement,
   }
   if (state->connection == nullptr || !state->connection->initialized) {
     return InvalidState(error, "connection is not initialized");
+  }
+  if (state->has_bound_stream) {
+    if (out != nullptr) {
+      return InvalidArgument(error,
+                             "bulk ingest does not produce a result stream");
+    }
+    return ExecuteBulkIngest(state, rows_affected, error);
   }
   if (state->sql.empty()) {
     return InvalidState(error, "SQL query is not set");
@@ -535,9 +831,22 @@ AdbcStatusCode DriverStatementBind(AdbcStatement*, ArrowArray*, ArrowSchema*,
   return NotImplemented(error, "parameter binding is not implemented");
 }
 
-AdbcStatusCode DriverStatementBindStream(AdbcStatement*, ArrowArrayStream*,
+AdbcStatusCode DriverStatementBindStream(AdbcStatement* statement,
+                                         ArrowArrayStream* stream,
                                          AdbcError* error) {
-  return NotImplemented(error, "parameter binding is not implemented");
+  StatementState* state = GetStatement(statement);
+  if (state == nullptr) {
+    return InvalidState(error, "statement is not initialized");
+  }
+  if (stream == nullptr) {
+    return InvalidArgument(error, "Arrow stream must not be null");
+  }
+  ReleaseBoundStream(state);
+  state->sql.clear();
+  state->bound_stream = *stream;
+  state->has_bound_stream = true;
+  stream->release = nullptr;
+  return Ok(error);
 }
 
 AdbcStatusCode DriverStatementRelease(AdbcStatement* statement,
@@ -545,9 +854,52 @@ AdbcStatusCode DriverStatementRelease(AdbcStatement* statement,
   if (statement == nullptr) {
     return Ok(error);
   }
-  delete GetStatement(statement);
+  StatementState* state = GetStatement(statement);
+  ReleaseBoundStream(state);
+  delete state;
   statement->private_data = nullptr;
   return Ok(error);
+}
+
+AdbcStatusCode DriverStatementSetOption(AdbcStatement* statement,
+                                        char const* key, char const* value,
+                                        AdbcError* error) {
+  StatementState* state = GetStatement(statement);
+  if (state == nullptr) {
+    return InvalidState(error, "statement is not initialized");
+  }
+  if (key == nullptr || value == nullptr) {
+    return InvalidArgument(error,
+                           "statement option key and value must not be null");
+  }
+  if (std::strcmp(key, ADBC_INGEST_OPTION_TARGET_TABLE) == 0) {
+    state->ingest_target_table = value;
+    return Ok(error);
+  }
+  if (std::strcmp(key, ADBC_INGEST_OPTION_TARGET_CATALOG) == 0) {
+    state->ingest_target_catalog = value;
+    return Ok(error);
+  }
+  if (std::strcmp(key, ADBC_INGEST_OPTION_TARGET_DB_SCHEMA) == 0) {
+    state->ingest_target_schema = value;
+    return Ok(error);
+  }
+  if (std::strcmp(key, ADBC_INGEST_OPTION_MODE) == 0) {
+    state->ingest_mode = value;
+    return Ok(error);
+  }
+  if (std::strcmp(key, ADBC_INGEST_OPTION_TEMPORARY) == 0) {
+    if (std::strcmp(value, ADBC_OPTION_VALUE_ENABLED) == 0) {
+      state->ingest_temporary = true;
+      return Ok(error);
+    }
+    if (std::strcmp(value, ADBC_OPTION_VALUE_DISABLED) == 0) {
+      state->ingest_temporary = false;
+      return Ok(error);
+    }
+    return InvalidArgument(error, "invalid temporary bulk ingest option value");
+  }
+  return NotImplemented(error, "unsupported statement option");
 }
 
 ADBC_EXPORT AdbcStatusCode AdbcDatabaseNew(AdbcDatabase* database,
@@ -619,6 +971,13 @@ ADBC_EXPORT AdbcStatusCode AdbcStatementExecuteQuery(AdbcStatement* statement,
 ADBC_EXPORT AdbcStatusCode AdbcStatementPrepare(AdbcStatement* statement,
                                                 AdbcError* error) {
   return DriverStatementPrepare(statement, error);
+}
+
+ADBC_EXPORT AdbcStatusCode AdbcStatementSetOption(AdbcStatement* statement,
+                                                  char const* key,
+                                                  char const* value,
+                                                  AdbcError* error) {
+  return DriverStatementSetOption(statement, key, value, error);
 }
 
 ADBC_EXPORT AdbcStatusCode AdbcStatementBind(AdbcStatement* statement,
