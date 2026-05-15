@@ -23,9 +23,8 @@ duckdb_extension_load(quack SOURCE_DIR "${adbc_driver_quack_quack_SOURCE_DIR}")
 duckdb_extension_load(json)
 duckdb_extension_load(autocomplete)
 
-find_package(ZLIB REQUIRED)
-if(TARGET ZLIB::ZLIB)
-  set_target_properties(ZLIB::ZLIB PROPERTIES IMPORTED_GLOBAL TRUE)
-endif()
+find_package(ZLIB REQUIRED GLOBAL)
+find_package(OpenSSL REQUIRED GLOBAL)
+find_package(CURL REQUIRED GLOBAL)
 duckdb_extension_load(httpfs GIT_URL https://github.com/duckdb/duckdb-httpfs
                       GIT_TAG 7e86e7a5e5a1f01f458361bebdfa9b0a9a73a619)
