@@ -129,8 +129,24 @@ configure_args=(
   -DCMAKE_FIND_PACKAGE_PREFER_CONFIG=ON
 )
 
+build_args=(--build "$build_dir" --config "$cmake_config" --parallel)
+
+case "${CMAKE_VERBOSE:-}" in
+  1 | ON | TRUE | true | yes | YES)
+    set -x
+    configure_args+=(
+      --log-level=VERBOSE
+      --debug-find-pkg=ZLIB
+      --debug-find-pkg=OpenSSL
+      --debug-find-pkg=CURL
+      -DCMAKE_VERBOSE_MAKEFILE=ON
+    )
+    build_args+=(--verbose)
+    ;;
+esac
+
 "${cmake[@]}" "${configure_args[@]}" "${generator_args[@]}"
-"${cmake[@]}" --build "$build_dir" --config "$cmake_config" --parallel
+"${cmake[@]}" "${build_args[@]}"
 
 built_library="$(
   find "$build_dir" \
