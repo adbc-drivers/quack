@@ -49,6 +49,9 @@ AdbcStatusCode DriverConnectionGetInfo(AdbcConnection* connection,
                                        uint32_t const* info_codes,
                                        size_t info_codes_length,
                                        ArrowArrayStream* out, AdbcError* error);
+AdbcStatusCode DriverConnectionGetOption(AdbcConnection* connection,
+                                         char const* key, char* value,
+                                         size_t* length, AdbcError* error);
 AdbcStatusCode DriverConnectionGetObjects(
     AdbcConnection* connection, int depth, char const* catalog,
     char const* db_schema, char const* table_name, char const** table_type,
@@ -892,6 +895,62 @@ AdbcStatusCode QueryRemoteVendorVersion(ConnectionState* state,
   return Ok(error);
 }
 
+AdbcStatusCode CopyOptionString(std::string const& option_value, char* value,
+                                size_t* length, AdbcError* error) {
+  if (length == nullptr) {
+    return InvalidArgument(error, "option length must not be null");
+  }
+  size_t const required_length = option_value.size() + 1;
+  size_t const available_length = *length;
+  *length = required_length;
+  if (available_length < required_length) {
+    return Ok(error);
+  }
+  if (value == nullptr) {
+    return InvalidArgument(error, "option value buffer must not be null");
+  }
+  std::memcpy(value, option_value.c_str(), required_length);
+  return Ok(error);
+}
+
+AdbcStatusCode QueryRemoteStringValue(ConnectionState* state,
+                                      std::string const& sql,
+                                      std::string* value, AdbcError* error) {
+  duckdb_result result;
+  std::string const remote_sql = adbc_driver_quack::BuildRemoteQuerySql(sql);
+  duckdb_state const query_state =
+      duckdb_query(state->connection, remote_sql.c_str(), &result);
+  if (query_state == DuckDBError) {
+    char const* result_error = duckdb_result_error(&result);
+    std::string message =
+        result_error != nullptr ? result_error : "DuckDB query failed";
+    auto const error_type =
+        static_cast<int32_t>(duckdb_result_error_type(&result));
+    duckdb_destroy_result(&result);
+    return IoError(error, std::move(message), error_type);
+  }
+
+  if (duckdb_column_count(&result) != 1 || duckdb_row_count(&result) != 1 ||
+      duckdb_column_type(&result, 0) != DUCKDB_TYPE_VARCHAR ||
+      duckdb_value_is_null(&result, 0, 0)) {
+    duckdb_destroy_result(&result);
+    return InvalidData(error,
+                       "remote DuckDB query did not return one string value");
+  }
+
+  char* result_value = duckdb_value_varchar(&result, 0, 0);
+  if (result_value == nullptr) {
+    duckdb_destroy_result(&result);
+    return InvalidData(error,
+                       "remote DuckDB query did not return one string value");
+  }
+
+  *value = result_value;
+  duckdb_free(result_value);
+  duckdb_destroy_result(&result);
+  return Ok(error);
+}
+
 AdbcStatusCode InitDriver(int version, void* raw_driver, AdbcError* error) {
   if (raw_driver == nullptr) {
     return InvalidArgument(error, "driver must not be null");
@@ -922,6 +981,7 @@ AdbcStatusCode InitDriver(int version, void* raw_driver, AdbcError* error) {
 
   driver->ConnectionInit = DriverConnectionInit;
   driver->ConnectionGetInfo = DriverConnectionGetInfo;
+  driver->ConnectionGetOption = DriverConnectionGetOption;
   driver->ConnectionGetObjects = DriverConnectionGetObjects;
   driver->ConnectionNew = DriverConnectionNew;
   driver->ConnectionRelease = DriverConnectionRelease;
@@ -1084,6 +1144,37 @@ AdbcStatusCode DriverConnectionGetInfo(AdbcConnection* connection,
     return SetError(error, result.status, result.message);
   }
   return Ok(error);
+}
+
+AdbcStatusCode DriverConnectionGetOption(AdbcConnection* connection,
+                                         char const* key, char* value,
+                                         size_t* length, AdbcError* error) {
+  ConnectionState* state = GetConnection(connection);
+  if (state == nullptr || !state->initialized) {
+    return InvalidState(error, "connection is not initialized");
+  }
+  if (key == nullptr) {
+    return InvalidArgument(error, "connection option key must not be null");
+  }
+
+  std::string option_value;
+  if (std::strcmp(key, ADBC_CONNECTION_OPTION_CURRENT_CATALOG) == 0) {
+    AdbcStatusCode status = QueryRemoteStringValue(
+        state, "SELECT current_database()", &option_value, error);
+    if (status != ADBC_STATUS_OK) {
+      return status;
+    }
+  } else if (std::strcmp(key, ADBC_CONNECTION_OPTION_CURRENT_DB_SCHEMA) == 0) {
+    AdbcStatusCode status = QueryRemoteStringValue(
+        state, "SELECT current_schema()", &option_value, error);
+    if (status != ADBC_STATUS_OK) {
+      return status;
+    }
+  } else {
+    return NotFound(error, std::string{"connection option not found: "} + key);
+  }
+
+  return CopyOptionString(option_value, value, length, error);
 }
 
 AdbcStatusCode DriverConnectionGetObjects(
