@@ -12,8 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-build*/
-validation-report.xml
-.pytest_cache/
-__pycache__/
-*.py[cod]
+import adbc_drivers_validation.tests.statement as statement_tests
+import pytest
+
+from .quack import get_quirks
+
+
+def pytest_generate_tests(metafunc) -> None:
+    quirks = [get_quirks(metafunc.config.getoption("vendor_version"))]
+    return statement_tests.generate_tests(quirks, metafunc)
+
+
+class TestStatement(statement_tests.TestStatement):
+    @pytest.mark.skip(reason="execute_schema not supported")
+    def test_execute_schema_noalias(self, driver, conn, sample_table: str) -> None:
+        super().test_execute_schema_noalias(driver, conn, sample_table)

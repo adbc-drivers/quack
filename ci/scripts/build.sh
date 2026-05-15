@@ -53,12 +53,60 @@ case "$platform" in
     ;;
 esac
 
+case "${platform}/${arch}" in
+  linux/amd64)
+    vcpkg_triplet="x64-linux"
+    ;;
+  linux/arm64)
+    vcpkg_triplet="arm64-linux"
+    ;;
+  macos/amd64)
+    vcpkg_triplet="x64-osx"
+    ;;
+  macos/arm64)
+    vcpkg_triplet="arm64-osx"
+    ;;
+  windows/amd64)
+    vcpkg_triplet="x64-windows"
+    ;;
+  windows/arm64)
+    vcpkg_triplet="arm64-windows"
+    ;;
+  *)
+    printf 'unsupported platform/architecture: %s/%s\n' "$platform" "$arch" >&2
+    exit 2
+    ;;
+esac
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
 build_dir="${repo_root}/build/ci-${mode}-${platform}-${arch}"
 output_library="${repo_root}/build/libadbc_driver_quack.${library_ext}"
 
 export PIXI_CACHE_DIR="${PIXI_CACHE_DIR:-/tmp/adbc-driver-quack-pixi-cache}"
+
+normalize_path() {
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -u "$1"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
+vcpkg_toolchain="${CMAKE_TOOLCHAIN_FILE:-}"
+if [[ -z "$vcpkg_toolchain" ]]; then
+  vcpkg_root="${VCPKG_ROOT:-${VCPKG_INSTALLATION_ROOT:-}}"
+  if [[ -n "$vcpkg_root" ]]; then
+    vcpkg_root="$(normalize_path "$vcpkg_root")"
+    vcpkg_toolchain="${vcpkg_root}/scripts/buildsystems/vcpkg.cmake"
+  fi
+else
+  vcpkg_toolchain="$(normalize_path "$vcpkg_toolchain")"
+fi
+if [[ ! -f "$vcpkg_toolchain" ]]; then
+  printf 'could not find vcpkg toolchain; set CMAKE_TOOLCHAIN_FILE, VCPKG_ROOT, or VCPKG_INSTALLATION_ROOT\n' >&2
+  exit 1
+fi
 
 cmake=(cmake)
 generator_args=()
@@ -76,10 +124,29 @@ configure_args=(
   -B "$build_dir"
   -DCMAKE_BUILD_TYPE="$cmake_config"
   -DBUILD_TESTING=ON
+  -DCMAKE_TOOLCHAIN_FILE="$vcpkg_toolchain"
+  -DVCPKG_TARGET_TRIPLET="$vcpkg_triplet"
+  -DCMAKE_FIND_PACKAGE_PREFER_CONFIG=ON
 )
 
+build_args=(--build "$build_dir" --config "$cmake_config" --parallel)
+
+case "${CMAKE_VERBOSE:-}" in
+  1 | ON | TRUE | true | yes | YES)
+    set -x
+    configure_args+=(
+      --log-level=VERBOSE
+      --debug-find-pkg=ZLIB
+      --debug-find-pkg=OpenSSL
+      --debug-find-pkg=CURL
+      -DCMAKE_VERBOSE_MAKEFILE=ON
+    )
+    build_args+=(--verbose)
+    ;;
+esac
+
 "${cmake[@]}" "${configure_args[@]}" "${generator_args[@]}"
-"${cmake[@]}" --build "$build_dir" --config "$cmake_config" --parallel
+"${cmake[@]}" "${build_args[@]}"
 
 built_library="$(
   find "$build_dir" \

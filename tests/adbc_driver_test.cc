@@ -15,6 +15,9 @@
 #include <arrow-adbc/adbc.h>
 #include <gtest/gtest.h>
 
+extern "C" AdbcStatusCode AdbcDriverInit(int version, void* driver,
+                                         AdbcError* error);
+
 TEST(AdbcDriverTest, ParameterBindingApisReturnNotImplemented) {
   AdbcStatement statement = {};
   AdbcError error = ADBC_ERROR_INIT;
@@ -25,4 +28,31 @@ TEST(AdbcDriverTest, ParameterBindingApisReturnNotImplemented) {
             ADBC_STATUS_NOT_IMPLEMENTED);
   EXPECT_EQ(AdbcStatementBindStream(&statement, nullptr, &error),
             ADBC_STATUS_NOT_IMPLEMENTED);
+}
+
+TEST(AdbcDriverTest, DatabaseInitHandlesManagerExtendedError) {
+  AdbcDriver driver = {};
+  ASSERT_EQ(AdbcDriverInit(ADBC_VERSION_1_1_0, &driver, nullptr),
+            ADBC_STATUS_OK);
+
+  AdbcDatabase database = {};
+  database.private_driver = &driver;
+  AdbcError error = ADBC_ERROR_INIT;
+  error.vendor_code = ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA;
+  error.private_driver = &driver;
+
+  ASSERT_EQ(AdbcDatabaseNew(&database, &error), ADBC_STATUS_OK);
+  EXPECT_EQ(database.private_driver, &driver);
+  ASSERT_EQ(AdbcDatabaseSetOption(&database, "uri",
+                                  "quack://localhost:9494/?token=quack-secret",
+                                  &error),
+            ADBC_STATUS_OK);
+  EXPECT_EQ(AdbcDatabaseInit(&database, &error), ADBC_STATUS_OK);
+  EXPECT_EQ(database.private_driver, &driver);
+  EXPECT_EQ(error.vendor_code, ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA);
+  EXPECT_EQ(error.private_driver, &driver);
+
+  ASSERT_EQ(AdbcDatabaseRelease(&database, nullptr), ADBC_STATUS_OK);
+  EXPECT_EQ(database.private_driver, &driver);
+  ASSERT_EQ(driver.release(&driver, nullptr), ADBC_STATUS_OK);
 }

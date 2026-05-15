@@ -24,4 +24,6 @@ subdir = "."
 additional-make-args = ["TOOLCHAIN=cpp"]
 
 [lang.script.validation]
-skip = true
+configs = [
+  { service_name = "test-service", vendor_version = "1.5.2" },
+]
