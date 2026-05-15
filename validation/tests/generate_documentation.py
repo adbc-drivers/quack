@@ -27,7 +27,9 @@ if __name__ == "__main__":
     template = Path(__file__).parent.parent.parent / "docs/quack.md"
     reports = [report.resolve() for report in Path(".").glob("validation-report*.xml")]
     generate_documentation.generate(
+        "quack",
         quack.get_quirks,
+        [("quack", "DuckDB Quack")],
         reports,
         template.resolve(),
         args.output.resolve(),

@@ -72,6 +72,6 @@ def get_quirks(version: str, *, vendor: str = "DuckDB Quack") -> QuackQuirks:
     quack_quirks = QuackQuirks()
     if version not in {quack_quirks.vendor_version, quack_quirks.short_version}:
         raise ValueError(f"Unsupported DuckDB Quack version: {version}")
-    if vendor != quack_quirks.vendor_name:
+    if vendor not in {quack_quirks.name, quack_quirks.vendor_name}:
         raise ValueError(f"Unsupported Quack vendor: {vendor}")
     return quack_quirks
