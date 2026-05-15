@@ -26,5 +26,9 @@ duckdb_extension_load(autocomplete)
 find_package(ZLIB REQUIRED GLOBAL)
 find_package(OpenSSL REQUIRED GLOBAL)
 find_package(CURL REQUIRED GLOBAL)
+set(ADBC_DRIVER_QUACK_PREVIOUS_HTTPFS_PROJECT_INCLUDE
+    "${CMAKE_PROJECT_HTTPFsExtension_INCLUDE}")
+set(CMAKE_PROJECT_HTTPFsExtension_INCLUDE
+    "${CMAKE_CURRENT_LIST_DIR}/httpfs_project_include.cmake")
 duckdb_extension_load(httpfs GIT_URL https://github.com/duckdb/duckdb-httpfs
                       GIT_TAG 7e86e7a5e5a1f01f458361bebdfa9b0a9a73a619)
