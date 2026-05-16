@@ -49,6 +49,13 @@ AdbcStatusCode DriverConnectionGetInfo(AdbcConnection* connection,
                                        uint32_t const* info_codes,
                                        size_t info_codes_length,
                                        ArrowArrayStream* out, AdbcError* error);
+AdbcStatusCode DriverConnectionGetOption(AdbcConnection* connection,
+                                         char const* key, char* value,
+                                         size_t* length, AdbcError* error);
+AdbcStatusCode DriverConnectionGetObjects(
+    AdbcConnection* connection, int depth, char const* catalog,
+    char const* db_schema, char const* table_name, char const** table_type,
+    char const* column_name, ArrowArrayStream* out, AdbcError* error);
 AdbcStatusCode DriverConnectionNew(AdbcConnection* connection,
                                    AdbcError* error);
 AdbcStatusCode DriverConnectionRelease(AdbcConnection* connection,
@@ -267,6 +274,332 @@ std::string QualifiedServerTableName(StatementState const* state) {
   }
   table += QuoteIdentifier(state->ingest_target_table);
   return table;
+}
+
+std::string LikeFilter(char const* value) {
+  if (value == nullptr) {
+    return "'%'";
+  }
+  return adbc_driver_quack::DuckDbSqlStringLiteral(value);
+}
+
+AdbcStatusCode BuildTableTypeCondition(char const** table_type,
+                                       std::string* condition,
+                                       AdbcError* error) {
+  condition->clear();
+  if (table_type == nullptr || table_type[0] == nullptr) {
+    return Ok(error);
+  }
+
+  *condition = " AND table_type IN (";
+  for (int i = 0; table_type[i] != nullptr; ++i) {
+    if (std::strcmp(table_type[i], "LOCAL TABLE") != 0 &&
+        std::strcmp(table_type[i], "BASE TABLE") != 0 &&
+        std::strcmp(table_type[i], "VIEW") != 0) {
+      return InvalidArgument(error,
+                             "table type must be \"LOCAL TABLE\", \"BASE "
+                             "TABLE\" or \"VIEW\"");
+    }
+    if (i > 0) {
+      *condition += ", ";
+    }
+    *condition += LikeFilter(table_type[i]);
+  }
+  *condition += ")";
+  return Ok(error);
+}
+
+std::string BuildGetObjectsQuery(int depth, std::string const& catalog_filter,
+                                 std::string const& db_schema_filter,
+                                 std::string const& table_name_filter,
+                                 std::string const& table_type_condition,
+                                 std::string const& column_name_filter) {
+  switch (depth) {
+    case ADBC_OBJECT_DEPTH_CATALOGS:
+      return R"(
+SELECT
+  catalog_name,
+  []::STRUCT(
+    db_schema_name VARCHAR,
+    db_schema_tables STRUCT(
+      table_name VARCHAR,
+      table_type VARCHAR,
+      table_columns STRUCT(
+        column_name VARCHAR,
+        ordinal_position INTEGER,
+        remarks VARCHAR,
+        xdbc_data_type SMALLINT,
+        xdbc_type_name VARCHAR,
+        xdbc_column_size INTEGER,
+        xdbc_decimal_digits SMALLINT,
+        xdbc_num_prec_radix SMALLINT,
+        xdbc_nullable SMALLINT,
+        xdbc_column_def VARCHAR,
+        xdbc_sql_data_type SMALLINT,
+        xdbc_datetime_sub SMALLINT,
+        xdbc_char_octet_length INTEGER,
+        xdbc_is_nullable VARCHAR,
+        xdbc_scope_catalog VARCHAR,
+        xdbc_scope_schema VARCHAR,
+        xdbc_scope_table VARCHAR,
+        xdbc_is_autoincrement BOOLEAN,
+        xdbc_is_generatedcolumn BOOLEAN
+      )[],
+      table_constraints STRUCT(
+        constraint_name VARCHAR,
+        constraint_type VARCHAR,
+        constraint_column_names VARCHAR[],
+        constraint_column_usage STRUCT(fk_catalog VARCHAR, fk_db_schema VARCHAR, fk_table VARCHAR, fk_column_name VARCHAR)[]
+      )[]
+    )[]
+  )[] catalog_db_schemas
+FROM information_schema.schemata
+WHERE catalog_name LIKE )" +
+             catalog_filter +
+             R"(
+GROUP BY catalog_name
+)";
+    case ADBC_OBJECT_DEPTH_DB_SCHEMAS:
+      return R"(
+WITH db_schemas AS (
+  SELECT
+    catalog_name,
+    schema_name,
+  FROM information_schema.schemata
+  WHERE schema_name LIKE )" +
+             db_schema_filter +
+             R"(
+)
+
+SELECT
+  catalog_name,
+  COALESCE(LIST({
+    db_schema_name: schema_name,
+    db_schema_tables: []::STRUCT(
+      table_name VARCHAR,
+      table_type VARCHAR,
+      table_columns STRUCT(
+        column_name VARCHAR,
+        ordinal_position INTEGER,
+        remarks VARCHAR,
+        xdbc_data_type SMALLINT,
+        xdbc_type_name VARCHAR,
+        xdbc_column_size INTEGER,
+        xdbc_decimal_digits SMALLINT,
+        xdbc_num_prec_radix SMALLINT,
+        xdbc_nullable SMALLINT,
+        xdbc_column_def VARCHAR,
+        xdbc_sql_data_type SMALLINT,
+        xdbc_datetime_sub SMALLINT,
+        xdbc_char_octet_length INTEGER,
+        xdbc_is_nullable VARCHAR,
+        xdbc_scope_catalog VARCHAR,
+        xdbc_scope_schema VARCHAR,
+        xdbc_scope_table VARCHAR,
+        xdbc_is_autoincrement BOOLEAN,
+        xdbc_is_generatedcolumn BOOLEAN
+      )[],
+      table_constraints STRUCT(
+        constraint_name VARCHAR,
+        constraint_type VARCHAR,
+        constraint_column_names VARCHAR[],
+        constraint_column_usage STRUCT(fk_catalog VARCHAR, fk_db_schema VARCHAR, fk_table VARCHAR, fk_column_name VARCHAR)[]
+      )[]
+    )[],
+  }) FILTER (dbs.schema_name is not null), []) catalog_db_schemas
+FROM information_schema.schemata
+LEFT JOIN db_schemas dbs
+USING (catalog_name, schema_name)
+WHERE catalog_name LIKE )" +
+             catalog_filter +
+             R"(
+GROUP BY catalog_name
+)";
+    case ADBC_OBJECT_DEPTH_TABLES:
+      return R"(
+WITH tables AS (
+  SELECT
+    table_catalog catalog_name,
+    table_schema schema_name,
+    LIST({
+      table_name: table_name,
+      table_type: table_type,
+      table_columns: []::STRUCT(
+        column_name VARCHAR,
+        ordinal_position INTEGER,
+        remarks VARCHAR,
+        xdbc_data_type SMALLINT,
+        xdbc_type_name VARCHAR,
+        xdbc_column_size INTEGER,
+        xdbc_decimal_digits SMALLINT,
+        xdbc_num_prec_radix SMALLINT,
+        xdbc_nullable SMALLINT,
+        xdbc_column_def VARCHAR,
+        xdbc_sql_data_type SMALLINT,
+        xdbc_datetime_sub SMALLINT,
+        xdbc_char_octet_length INTEGER,
+        xdbc_is_nullable VARCHAR,
+        xdbc_scope_catalog VARCHAR,
+        xdbc_scope_schema VARCHAR,
+        xdbc_scope_table VARCHAR,
+        xdbc_is_autoincrement BOOLEAN,
+        xdbc_is_generatedcolumn BOOLEAN
+      )[],
+      table_constraints: []::STRUCT(
+        constraint_name VARCHAR,
+        constraint_type VARCHAR,
+        constraint_column_names VARCHAR[],
+        constraint_column_usage STRUCT(fk_catalog VARCHAR, fk_db_schema VARCHAR, fk_table VARCHAR, fk_column_name VARCHAR)[]
+      )[],
+    }) db_schema_tables
+  FROM information_schema.tables
+  WHERE table_name LIKE )" +
+             table_name_filter + table_type_condition + R"(
+  GROUP BY table_catalog, table_schema
+),
+db_schemas AS (
+  SELECT
+    catalog_name,
+    schema_name,
+    COALESCE(db_schema_tables, []) AS db_schema_tables,
+  FROM information_schema.schemata
+  LEFT JOIN tables
+  USING (catalog_name, schema_name)
+  WHERE schema_name LIKE )" +
+             db_schema_filter +
+             R"(
+)
+
+SELECT
+  catalog_name,
+  COALESCE(LIST({
+    db_schema_name: schema_name,
+    db_schema_tables: db_schema_tables,
+  }) FILTER (dbs.schema_name is not null), []) catalog_db_schemas
+FROM information_schema.schemata
+LEFT JOIN db_schemas dbs
+USING (catalog_name, schema_name)
+WHERE catalog_name LIKE )" +
+             catalog_filter +
+             R"(
+GROUP BY catalog_name
+)";
+    case ADBC_OBJECT_DEPTH_COLUMNS:
+      return R"(
+WITH columns AS (
+  SELECT
+    table_catalog,
+    table_schema,
+    table_name,
+    LIST({
+      column_name: column_name,
+      ordinal_position: ordinal_position,
+      remarks: '',
+      xdbc_data_type: NULL::SMALLINT,
+      xdbc_type_name: NULL::VARCHAR,
+      xdbc_column_size: NULL::INTEGER,
+      xdbc_decimal_digits: NULL::SMALLINT,
+      xdbc_num_prec_radix: NULL::SMALLINT,
+      xdbc_nullable: NULL::SMALLINT,
+      xdbc_column_def: NULL::VARCHAR,
+      xdbc_sql_data_type: NULL::SMALLINT,
+      xdbc_datetime_sub: NULL::SMALLINT,
+      xdbc_char_octet_length: NULL::INTEGER,
+      xdbc_is_nullable: NULL::VARCHAR,
+      xdbc_scope_catalog: NULL::VARCHAR,
+      xdbc_scope_schema: NULL::VARCHAR,
+      xdbc_scope_table: NULL::VARCHAR,
+      xdbc_is_autoincrement: NULL::BOOLEAN,
+      xdbc_is_generatedcolumn: NULL::BOOLEAN,
+    }) table_columns
+  FROM information_schema.columns
+  WHERE column_name LIKE )" +
+             column_name_filter +
+             R"(
+  GROUP BY table_catalog, table_schema, table_name
+),
+constraints AS (
+  SELECT
+    database_name AS table_catalog,
+    schema_name AS table_schema,
+    table_name,
+    LIST({
+      constraint_name: constraint_name,
+      constraint_type: constraint_type,
+      constraint_column_names: constraint_column_names,
+      constraint_column_usage: list_transform(
+        referenced_column_names,
+        lambda name: {
+          fk_catalog: database_name,
+          fk_db_schema: schema_name,
+          fk_table: referenced_table,
+          fk_column_name: name,
+        }
+      )
+    }) table_constraints
+  FROM duckdb_constraints()
+  WHERE
+    constraint_type NOT IN ('NOT NULL') AND
+    list_has_any(
+      constraint_column_names,
+      list_filter(
+        constraint_column_names,
+        lambda name: name LIKE )" +
+             column_name_filter +
+             R"(
+      )
+    )
+  GROUP BY database_name, schema_name, table_name
+),
+tables AS (
+  SELECT
+    table_catalog catalog_name,
+    table_schema schema_name,
+    LIST({
+      table_name: table_name,
+      table_type: table_type,
+      table_columns: COALESCE(table_columns, []),
+      table_constraints: COALESCE(table_constraints, []),
+    }) db_schema_tables
+  FROM information_schema.tables
+  LEFT JOIN columns
+  USING (table_catalog, table_schema, table_name)
+  LEFT JOIN constraints
+  USING (table_catalog, table_schema, table_name)
+  WHERE table_name LIKE )" +
+             table_name_filter + table_type_condition + R"(
+  GROUP BY table_catalog, table_schema
+),
+db_schemas AS (
+  SELECT
+    catalog_name,
+    schema_name,
+    COALESCE(db_schema_tables, []) AS db_schema_tables,
+  FROM information_schema.schemata
+  LEFT JOIN tables
+  USING (catalog_name, schema_name)
+  WHERE schema_name LIKE )" +
+             db_schema_filter +
+             R"(
+)
+
+SELECT
+  catalog_name,
+  COALESCE(LIST({
+    db_schema_name: schema_name,
+    db_schema_tables: db_schema_tables,
+  }) FILTER (dbs.schema_name is not null), []) catalog_db_schemas
+FROM information_schema.schemata
+LEFT JOIN db_schemas dbs
+USING (catalog_name, schema_name)
+WHERE catalog_name LIKE )" +
+             catalog_filter +
+             R"(
+GROUP BY catalog_name
+)";
+    default:
+      return {};
+  }
 }
 
 void CloseConnectionState(ConnectionState* state) {
@@ -562,6 +895,62 @@ AdbcStatusCode QueryRemoteVendorVersion(ConnectionState* state,
   return Ok(error);
 }
 
+AdbcStatusCode CopyOptionString(std::string const& option_value, char* value,
+                                size_t* length, AdbcError* error) {
+  if (length == nullptr) {
+    return InvalidArgument(error, "option length must not be null");
+  }
+  size_t const required_length = option_value.size() + 1;
+  size_t const available_length = *length;
+  *length = required_length;
+  if (available_length < required_length) {
+    return Ok(error);
+  }
+  if (value == nullptr) {
+    return InvalidArgument(error, "option value buffer must not be null");
+  }
+  std::memcpy(value, option_value.c_str(), required_length);
+  return Ok(error);
+}
+
+AdbcStatusCode QueryRemoteStringValue(ConnectionState* state,
+                                      std::string const& sql,
+                                      std::string* value, AdbcError* error) {
+  duckdb_result result;
+  std::string const remote_sql = adbc_driver_quack::BuildRemoteQuerySql(sql);
+  duckdb_state const query_state =
+      duckdb_query(state->connection, remote_sql.c_str(), &result);
+  if (query_state == DuckDBError) {
+    char const* result_error = duckdb_result_error(&result);
+    std::string message =
+        result_error != nullptr ? result_error : "DuckDB query failed";
+    auto const error_type =
+        static_cast<int32_t>(duckdb_result_error_type(&result));
+    duckdb_destroy_result(&result);
+    return IoError(error, std::move(message), error_type);
+  }
+
+  if (duckdb_column_count(&result) != 1 || duckdb_row_count(&result) != 1 ||
+      duckdb_column_type(&result, 0) != DUCKDB_TYPE_VARCHAR ||
+      duckdb_value_is_null(&result, 0, 0)) {
+    duckdb_destroy_result(&result);
+    return InvalidData(error,
+                       "remote DuckDB query did not return one string value");
+  }
+
+  char* result_value = duckdb_value_varchar(&result, 0, 0);
+  if (result_value == nullptr) {
+    duckdb_destroy_result(&result);
+    return InvalidData(error,
+                       "remote DuckDB query did not return one string value");
+  }
+
+  *value = result_value;
+  duckdb_free(result_value);
+  duckdb_destroy_result(&result);
+  return Ok(error);
+}
+
 AdbcStatusCode InitDriver(int version, void* raw_driver, AdbcError* error) {
   if (raw_driver == nullptr) {
     return InvalidArgument(error, "driver must not be null");
@@ -592,6 +981,8 @@ AdbcStatusCode InitDriver(int version, void* raw_driver, AdbcError* error) {
 
   driver->ConnectionInit = DriverConnectionInit;
   driver->ConnectionGetInfo = DriverConnectionGetInfo;
+  driver->ConnectionGetOption = DriverConnectionGetOption;
+  driver->ConnectionGetObjects = DriverConnectionGetObjects;
   driver->ConnectionNew = DriverConnectionNew;
   driver->ConnectionRelease = DriverConnectionRelease;
 
@@ -751,6 +1142,69 @@ AdbcStatusCode DriverConnectionGetInfo(AdbcConnection* connection,
       remote_vendor_version, info_codes, info_codes_length, out);
   if (result.status != ADBC_STATUS_OK) {
     return SetError(error, result.status, result.message);
+  }
+  return Ok(error);
+}
+
+AdbcStatusCode DriverConnectionGetOption(AdbcConnection* connection,
+                                         char const* key, char* value,
+                                         size_t* length, AdbcError* error) {
+  ConnectionState* state = GetConnection(connection);
+  if (state == nullptr || !state->initialized) {
+    return InvalidState(error, "connection is not initialized");
+  }
+  if (key == nullptr) {
+    return InvalidArgument(error, "connection option key must not be null");
+  }
+
+  std::string option_value;
+  if (std::strcmp(key, ADBC_CONNECTION_OPTION_CURRENT_CATALOG) == 0) {
+    AdbcStatusCode status = QueryRemoteStringValue(
+        state, "SELECT current_database()", &option_value, error);
+    if (status != ADBC_STATUS_OK) {
+      return status;
+    }
+  } else if (std::strcmp(key, ADBC_CONNECTION_OPTION_CURRENT_DB_SCHEMA) == 0) {
+    AdbcStatusCode status = QueryRemoteStringValue(
+        state, "SELECT current_schema()", &option_value, error);
+    if (status != ADBC_STATUS_OK) {
+      return status;
+    }
+  } else {
+    return NotFound(error, std::string{"connection option not found: "} + key);
+  }
+
+  return CopyOptionString(option_value, value, length, error);
+}
+
+AdbcStatusCode DriverConnectionGetObjects(
+    AdbcConnection* connection, int depth, char const* catalog,
+    char const* db_schema, char const* table_name, char const** table_type,
+    char const* column_name, ArrowArrayStream* out, AdbcError* error) {
+  ConnectionState* state = GetConnection(connection);
+  if (state == nullptr || !state->initialized) {
+    return InvalidState(error, "connection is not initialized");
+  }
+
+  std::string table_type_condition;
+  AdbcStatusCode status =
+      BuildTableTypeCondition(table_type, &table_type_condition, error);
+  if (status != ADBC_STATUS_OK) {
+    return status;
+  }
+
+  std::string const query = BuildGetObjectsQuery(
+      depth, LikeFilter(catalog), LikeFilter(db_schema), LikeFilter(table_name),
+      table_type_condition, LikeFilter(column_name));
+  if (query.empty()) {
+    return InvalidArgument(error, "invalid GetObjects depth");
+  }
+
+  auto const result = adbc_driver_quack::ExecuteDuckDbArrowQuery(
+      state->connection, adbc_driver_quack::BuildRemoteQuerySql(query), out,
+      nullptr);
+  if (result.status != ADBC_STATUS_OK) {
+    return SetError(error, result.status, result.message, result.vendor_code);
   }
   return Ok(error);
 }
@@ -947,6 +1401,15 @@ ADBC_EXPORT AdbcStatusCode AdbcConnectionGetInfo(AdbcConnection* connection,
                                                  AdbcError* error) {
   return DriverConnectionGetInfo(connection, info_codes, info_codes_length, out,
                                  error);
+}
+
+ADBC_EXPORT AdbcStatusCode AdbcConnectionGetObjects(
+    AdbcConnection* connection, int depth, char const* catalog,
+    char const* db_schema, char const* table_name, char const** table_type,
+    char const* column_name, ArrowArrayStream* out, AdbcError* error) {
+  return DriverConnectionGetObjects(connection, depth, catalog, db_schema,
+                                    table_name, table_type, column_name, out,
+                                    error);
 }
 
 ADBC_EXPORT AdbcStatusCode AdbcStatementNew(AdbcConnection* connection,

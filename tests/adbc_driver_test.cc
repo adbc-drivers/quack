@@ -28,6 +28,26 @@ TEST(AdbcDriverTest, UnsupportedStatementApisReturnNotImplemented) {
             ADBC_STATUS_NOT_IMPLEMENTED);
 }
 
+TEST(AdbcDriverTest, DriverExposesGetObjects) {
+  AdbcDriver driver = {};
+  ASSERT_EQ(AdbcDriverInit(ADBC_VERSION_1_1_0, &driver, nullptr),
+            ADBC_STATUS_OK);
+
+  EXPECT_NE(driver.ConnectionGetObjects, nullptr);
+
+  ASSERT_EQ(driver.release(&driver, nullptr), ADBC_STATUS_OK);
+}
+
+TEST(AdbcDriverTest, DriverExposesConnectionGetOption) {
+  AdbcDriver driver = {};
+  ASSERT_EQ(AdbcDriverInit(ADBC_VERSION_1_1_0, &driver, nullptr),
+            ADBC_STATUS_OK);
+
+  EXPECT_NE(driver.ConnectionGetOption, nullptr);
+
+  ASSERT_EQ(driver.release(&driver, nullptr), ADBC_STATUS_OK);
+}
+
 TEST(AdbcDriverTest, BindStreamRejectsUninitializedStatement) {
   AdbcStatement statement = {};
   AdbcError error = ADBC_ERROR_INIT;
