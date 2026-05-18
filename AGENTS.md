@@ -57,13 +57,10 @@ For C++ tests after that build:
 The build script requires a vcpkg toolchain via `CMAKE_TOOLCHAIN_FILE`,
 `VCPKG_ROOT`, or `VCPKG_INSTALLATION_ROOT`.
 
-For direct CMake iteration, use a build directory under `build/`, for example:
-
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
-ctest --test-dir build --output-on-failure
-```
+Prefer `./ci/scripts/build.sh test linux amd64` over direct CMake invocation.
+That script configures the vcpkg toolchain, uses the expected CI build
+directory, builds the tests, and copies the driver library to
+`build/libadbc_driver_quack.so` for validation.
 
 Validation is configured as a Pixi task and expects the driver library at
 `build/libadbc_driver_quack.so` on Linux:
