@@ -17,10 +17,10 @@ import pytest
 
 
 def test_package() -> None:
-    with pytest.raises(adbc_driver_manager.dbapi.Error, match="foo"):
+    with pytest.raises(adbc_driver_manager.dbapi.Error, match="Failed to send message"):
         with adbc_driver_manager.dbapi.connect(
             driver="quack",
-            uri="quack://localhost:1/",
+            uri="quack://localhost:9495/?token=foo",
             autocommit=True,
         ) as conn:
             with conn.cursor() as cursor:
