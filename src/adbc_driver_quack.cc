@@ -45,6 +45,8 @@ AdbcStatusCode DriverDatabaseSetOption(AdbcDatabase* database, char const* key,
 AdbcStatusCode DriverDatabaseRelease(AdbcDatabase* database, AdbcError* error);
 AdbcStatusCode DriverConnectionInit(AdbcConnection* connection,
                                     AdbcDatabase* database, AdbcError* error);
+AdbcStatusCode DriverConnectionCommit(AdbcConnection* connection,
+                                      AdbcError* error);
 AdbcStatusCode DriverConnectionGetInfo(AdbcConnection* connection,
                                        uint32_t const* info_codes,
                                        size_t info_codes_length,
@@ -60,6 +62,8 @@ AdbcStatusCode DriverConnectionNew(AdbcConnection* connection,
                                    AdbcError* error);
 AdbcStatusCode DriverConnectionRelease(AdbcConnection* connection,
                                        AdbcError* error);
+AdbcStatusCode DriverConnectionRollback(AdbcConnection* connection,
+                                        AdbcError* error);
 AdbcStatusCode DriverConnectionSetOption(AdbcConnection* connection,
                                          char const* key, char const* value,
                                          AdbcError* error);
@@ -98,6 +102,8 @@ struct ConnectionState {
   duckdb_connection connection = nullptr;
   uint64_t next_ingest_id = 0;
   bool initialized = false;
+  bool autocommit = true;
+  bool transaction_active = false;
 };
 
 struct StatementState {
@@ -110,6 +116,7 @@ struct StatementState {
   bool ingest_temporary = false;
   ArrowArrayStream bound_stream = {};
   bool has_bound_stream = false;
+  bool prepared = false;
 };
 
 struct DriverState {
@@ -640,6 +647,7 @@ void CloseConnectionState(ConnectionState* state) {
     duckdb_close(&state->database);
   }
   state->initialized = false;
+  state->transaction_active = false;
 }
 
 AdbcStatusCode RunDuckDbQuery(ConnectionState* state, std::string const& sql,
@@ -890,7 +898,7 @@ AdbcStatusCode ExecuteBulkIngest(StatementState* state, int64_t* rows_affected,
 
   RunDuckDbQuery(state->connection, "DROP TABLE IF EXISTS " + quoted_data,
                  nullptr);
-  if (status == ADBC_STATUS_OK) {
+  if (status == ADBC_STATUS_OK && state->connection->autocommit) {
     RunDuckDbQuery(state->connection, "COMMIT", nullptr);
   }
   if (status == ADBC_STATUS_OK && rows_affected != nullptr) {
@@ -1023,12 +1031,14 @@ AdbcStatusCode InitDriver(int version, void* raw_driver, AdbcError* error) {
   driver->DatabaseSetOption = DriverDatabaseSetOption;
   driver->DatabaseRelease = DriverDatabaseRelease;
 
+  driver->ConnectionCommit = DriverConnectionCommit;
   driver->ConnectionInit = DriverConnectionInit;
   driver->ConnectionGetInfo = DriverConnectionGetInfo;
   driver->ConnectionGetOption = DriverConnectionGetOption;
   driver->ConnectionGetObjects = DriverConnectionGetObjects;
   driver->ConnectionNew = DriverConnectionNew;
   driver->ConnectionRelease = DriverConnectionRelease;
+  driver->ConnectionRollback = DriverConnectionRollback;
   driver->ConnectionSetOption = DriverConnectionSetOption;
 
   driver->StatementBind = DriverStatementBind;
@@ -1166,6 +1176,51 @@ AdbcStatusCode DriverConnectionRelease(AdbcConnection* connection,
   return Ok(error);
 }
 
+static AdbcStatusCode BeginRemoteTransaction(ConnectionState* state,
+                                             AdbcError* error) {
+  AdbcStatusCode const status =
+      RunRemoteQuery(state, "BEGIN TRANSACTION", error);
+  if (status == ADBC_STATUS_OK) {
+    state->transaction_active = true;
+  }
+  return status;
+}
+
+static AdbcStatusCode FinishRemoteTransaction(ConnectionState* state,
+                                              char const* sql,
+                                              AdbcError* error) {
+  if (state->autocommit) {
+    return InvalidState(error,
+                        "connection is in autocommit mode; cannot finish a "
+                        "manual transaction");
+  }
+
+  AdbcStatusCode status = RunRemoteQuery(state, sql, error);
+  if (status != ADBC_STATUS_OK) {
+    return status;
+  }
+  state->transaction_active = false;
+  return BeginRemoteTransaction(state, error);
+}
+
+AdbcStatusCode DriverConnectionCommit(AdbcConnection* connection,
+                                      AdbcError* error) {
+  ConnectionState* state = GetConnection(connection);
+  if (state == nullptr || !state->initialized) {
+    return InvalidState(error, "connection is not initialized");
+  }
+  return FinishRemoteTransaction(state, "COMMIT", error);
+}
+
+AdbcStatusCode DriverConnectionRollback(AdbcConnection* connection,
+                                        AdbcError* error) {
+  ConnectionState* state = GetConnection(connection);
+  if (state == nullptr || !state->initialized) {
+    return InvalidState(error, "connection is not initialized");
+  }
+  return FinishRemoteTransaction(state, "ROLLBACK", error);
+}
+
 AdbcStatusCode DriverConnectionGetInfo(AdbcConnection* connection,
                                        uint32_t const* info_codes,
                                        size_t info_codes_length,
@@ -1215,6 +1270,9 @@ AdbcStatusCode DriverConnectionGetOption(AdbcConnection* connection,
     if (status != ADBC_STATUS_OK) {
       return status;
     }
+  } else if (std::strcmp(key, ADBC_CONNECTION_OPTION_AUTOCOMMIT) == 0) {
+    option_value = state->autocommit ? ADBC_OPTION_VALUE_ENABLED
+                                     : ADBC_OPTION_VALUE_DISABLED;
   } else {
     return NotFound(error, std::string{"connection option not found: "} + key);
   }
@@ -1272,6 +1330,30 @@ AdbcStatusCode DriverConnectionSetOption(AdbcConnection* connection,
     std::string const sql = "USE " + QuoteIdentifier(value);
     return RunRemoteQueryAllowNotFound(state, sql, error);
   }
+  if (std::strcmp(key, ADBC_CONNECTION_OPTION_AUTOCOMMIT) == 0) {
+    if (std::strcmp(value, ADBC_OPTION_VALUE_ENABLED) == 0) {
+      if (!state->autocommit && state->transaction_active) {
+        AdbcStatusCode const status = RunRemoteQuery(state, "COMMIT", error);
+        if (status != ADBC_STATUS_OK) {
+          return status;
+        }
+        state->transaction_active = false;
+      }
+      state->autocommit = true;
+      return Ok(error);
+    }
+    if (std::strcmp(value, ADBC_OPTION_VALUE_DISABLED) == 0) {
+      if (state->autocommit) {
+        AdbcStatusCode const status = BeginRemoteTransaction(state, error);
+        if (status != ADBC_STATUS_OK) {
+          return status;
+        }
+      }
+      state->autocommit = false;
+      return Ok(error);
+    }
+    return InvalidArgument(error, "invalid autocommit option value");
+  }
 
   return NotImplemented(error, "unsupported connection option");
 }
@@ -1300,6 +1382,7 @@ AdbcStatusCode DriverStatementSetSqlQuery(AdbcStatement* statement,
   }
   ReleaseBoundStream(state);
   state->sql = query;
+  state->prepared = false;
   return Ok(error);
 }
 
@@ -1315,6 +1398,10 @@ AdbcStatusCode DriverStatementExecuteQuery(AdbcStatement* statement,
     return InvalidState(error, "connection is not initialized");
   }
   if (state->has_bound_stream) {
+    if (!state->sql.empty()) {
+      return NotImplemented(error,
+                            "parameterized SQL execution is not implemented");
+    }
     if (out != nullptr) {
       return InvalidArgument(error,
                              "bulk ingest does not produce a result stream");
@@ -1344,8 +1431,20 @@ AdbcStatusCode DriverStatementExecuteQuery(AdbcStatement* statement,
   return status;
 }
 
-AdbcStatusCode DriverStatementPrepare(AdbcStatement*, AdbcError* error) {
-  return NotImplemented(error, "parameterized statements are not implemented");
+AdbcStatusCode DriverStatementPrepare(AdbcStatement* statement,
+                                      AdbcError* error) {
+  StatementState* state = GetStatement(statement);
+  if (state == nullptr) {
+    return InvalidState(error, "statement is not initialized");
+  }
+  if (state->connection == nullptr || !state->connection->initialized) {
+    return InvalidState(error, "connection is not initialized");
+  }
+  if (state->sql.empty()) {
+    return InvalidState(error, "SQL query is not set");
+  }
+  state->prepared = true;
+  return Ok(error);
 }
 
 AdbcStatusCode DriverStatementBind(AdbcStatement*, ArrowArray*, ArrowSchema*,
@@ -1364,7 +1463,6 @@ AdbcStatusCode DriverStatementBindStream(AdbcStatement* statement,
     return InvalidArgument(error, "Arrow stream must not be null");
   }
   ReleaseBoundStream(state);
-  state->sql.clear();
   state->bound_stream = *stream;
   state->has_bound_stream = true;
   stream->release = nullptr;
@@ -1396,6 +1494,8 @@ AdbcStatusCode DriverStatementSetOption(AdbcStatement* statement,
   }
   if (std::strcmp(key, ADBC_INGEST_OPTION_TARGET_TABLE) == 0) {
     state->ingest_target_table = value;
+    state->sql.clear();
+    state->prepared = false;
     return Ok(error);
   }
   if (std::strcmp(key, ADBC_INGEST_OPTION_TARGET_CATALOG) == 0) {
@@ -1462,11 +1562,28 @@ ADBC_EXPORT AdbcStatusCode AdbcConnectionRelease(AdbcConnection* connection,
   return DriverConnectionRelease(connection, error);
 }
 
+ADBC_EXPORT AdbcStatusCode AdbcConnectionCommit(AdbcConnection* connection,
+                                                AdbcError* error) {
+  return DriverConnectionCommit(connection, error);
+}
+
+ADBC_EXPORT AdbcStatusCode AdbcConnectionRollback(AdbcConnection* connection,
+                                                  AdbcError* error) {
+  return DriverConnectionRollback(connection, error);
+}
+
 ADBC_EXPORT AdbcStatusCode AdbcConnectionSetOption(AdbcConnection* connection,
                                                    char const* key,
                                                    char const* value,
                                                    AdbcError* error) {
   return DriverConnectionSetOption(connection, key, value, error);
+}
+
+ADBC_EXPORT AdbcStatusCode AdbcConnectionGetOption(AdbcConnection* connection,
+                                                   char const* key, char* value,
+                                                   size_t* length,
+                                                   AdbcError* error) {
+  return DriverConnectionGetOption(connection, key, value, length, error);
 }
 
 ADBC_EXPORT AdbcStatusCode AdbcConnectionGetInfo(AdbcConnection* connection,

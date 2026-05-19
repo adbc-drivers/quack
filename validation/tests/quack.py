@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import functools
-import os
 from pathlib import Path
 
 from adbc_drivers_validation import model, quirks
@@ -30,7 +29,7 @@ class QuackQuirks(model.DriverQuirks):
         connection_get_table_schema=False,
         connection_set_current_catalog=True,
         connection_set_current_schema=True,
-        connection_transactions=False,
+        connection_transactions=True,
         current_catalog="quack-validation",
         current_schema="main",
         get_objects=True,
@@ -38,7 +37,7 @@ class QuackQuirks(model.DriverQuirks):
         statement_bulk_ingest=True,
         statement_execute_schema=False,
         statement_get_parameter_schema=False,
-        statement_prepare=False,
+        statement_prepare=True,
         statement_rows_affected=False,
         statement_rows_affected_ddl=False,
         secondary_catalog="quack-validation",
@@ -47,9 +46,7 @@ class QuackQuirks(model.DriverQuirks):
     )
     setup = model.DriverSetup(
         database={
-            "uri": os.environ.get(
-                "QUACK_URI", "quack://localhost:9494/?token=quack-secret"
-            )
+            "uri": model.FromEnv("QUACK_URI"),
         },
         connection={},
         statement={},

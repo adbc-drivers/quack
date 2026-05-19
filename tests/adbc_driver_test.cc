@@ -15,7 +15,9 @@
 #include <arrow-adbc/adbc.h>
 #include <gtest/gtest.h>
 
+#include <cstdlib>
 #include <cstring>
+#include <string>
 
 extern "C" AdbcStatusCode AdbcDriverInit(int version, void* driver,
                                          AdbcError* error);
@@ -29,16 +31,152 @@ void ExpectErrorMessage(AdbcError* error, char const* message) {
   error->release(error);
 }
 
+void ReleaseTestStream(ArrowArrayStream* stream) { stream->release = nullptr; }
+
+bool GetQuackUri(std::string* uri) {
+  char const* value = std::getenv("QUACK_URI");
+  if (value == nullptr || value[0] == '\0') {
+    return false;
+  }
+  *uri = value;
+  return true;
+}
+
+struct TestConnection {
+  AdbcDatabase database = {};
+  AdbcConnection connection = {};
+
+  explicit TestConnection(std::string const& uri) {
+    AdbcError error = ADBC_ERROR_INIT;
+    EXPECT_EQ(AdbcDatabaseNew(&database, &error), ADBC_STATUS_OK);
+    EXPECT_EQ(AdbcDatabaseSetOption(&database, "uri", uri.c_str(), &error),
+              ADBC_STATUS_OK);
+    EXPECT_EQ(AdbcDatabaseInit(&database, &error), ADBC_STATUS_OK);
+    EXPECT_EQ(AdbcConnectionNew(&connection, &error), ADBC_STATUS_OK);
+    EXPECT_EQ(AdbcConnectionInit(&connection, &database, &error),
+              ADBC_STATUS_OK);
+  }
+
+  ~TestConnection() {
+    EXPECT_EQ(AdbcConnectionRelease(&connection, nullptr), ADBC_STATUS_OK);
+    EXPECT_EQ(AdbcDatabaseRelease(&database, nullptr), ADBC_STATUS_OK);
+  }
+};
+
+class AdbcDriverLiveTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    if (!GetQuackUri(&quack_uri_)) {
+      GTEST_SKIP() << "QUACK_URI is required for live Quack server tests";
+    }
+  }
+
+  std::string quack_uri_;
+};
+
 }  // namespace
 
-TEST(AdbcDriverTest, UnsupportedStatementApisReturnNotImplemented) {
+TEST(AdbcDriverTest, PrepareRejectsUninitializedStatement) {
   AdbcStatement statement = {};
   AdbcError error = ADBC_ERROR_INIT;
 
   EXPECT_EQ(AdbcStatementPrepare(&statement, &error),
-            ADBC_STATUS_NOT_IMPLEMENTED);
+            ADBC_STATUS_INVALID_STATE);
+}
+
+TEST_F(AdbcDriverLiveTest, PrepareRequiresSqlQuery) {
+  TestConnection connection(quack_uri_);
+  AdbcStatement statement = {};
+  AdbcError error = ADBC_ERROR_INIT;
+
+  ASSERT_EQ(AdbcStatementNew(&connection.connection, &statement, &error),
+            ADBC_STATUS_OK);
+  EXPECT_EQ(AdbcStatementPrepare(&statement, &error),
+            ADBC_STATUS_INVALID_STATE);
+
+  ASSERT_EQ(AdbcStatementRelease(&statement, nullptr), ADBC_STATUS_OK);
+}
+
+TEST_F(AdbcDriverLiveTest, PrepareAcceptsSqlQuery) {
+  TestConnection connection(quack_uri_);
+  AdbcStatement statement = {};
+  AdbcError error = ADBC_ERROR_INIT;
+
+  ASSERT_EQ(AdbcStatementNew(&connection.connection, &statement, &error),
+            ADBC_STATUS_OK);
+  ASSERT_EQ(AdbcStatementSetSqlQuery(&statement, "SELECT 1", &error),
+            ADBC_STATUS_OK);
+  EXPECT_EQ(AdbcStatementPrepare(&statement, &error), ADBC_STATUS_OK);
+
+  ASSERT_EQ(AdbcStatementRelease(&statement, nullptr), ADBC_STATUS_OK);
+}
+
+TEST(AdbcDriverTest, BindRemainsNotImplemented) {
+  AdbcStatement statement = {};
+  AdbcError error = ADBC_ERROR_INIT;
+
   EXPECT_EQ(AdbcStatementBind(&statement, nullptr, nullptr, &error),
             ADBC_STATUS_NOT_IMPLEMENTED);
+}
+
+TEST_F(AdbcDriverLiveTest, BindStreamPreservesSqlUntilExecute) {
+  TestConnection connection(quack_uri_);
+  AdbcStatement statement = {};
+  ArrowArrayStream stream = {};
+  stream.release = ReleaseTestStream;
+  AdbcError error = ADBC_ERROR_INIT;
+
+  ASSERT_EQ(AdbcStatementNew(&connection.connection, &statement, &error),
+            ADBC_STATUS_OK);
+  ASSERT_EQ(AdbcStatementSetSqlQuery(&statement, "SELECT ?", &error),
+            ADBC_STATUS_OK);
+  ASSERT_EQ(AdbcStatementBindStream(&statement, &stream, &error),
+            ADBC_STATUS_OK);
+  EXPECT_EQ(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
+            ADBC_STATUS_NOT_IMPLEMENTED);
+
+  ASSERT_EQ(AdbcStatementRelease(&statement, nullptr), ADBC_STATUS_OK);
+}
+
+TEST_F(AdbcDriverLiveTest, IngestTargetTableClearsSqlQuery) {
+  TestConnection connection(quack_uri_);
+  AdbcStatement statement = {};
+  AdbcError error = ADBC_ERROR_INIT;
+
+  ASSERT_EQ(AdbcStatementNew(&connection.connection, &statement, &error),
+            ADBC_STATUS_OK);
+  ASSERT_EQ(AdbcStatementSetSqlQuery(&statement, "SELECT 1", &error),
+            ADBC_STATUS_OK);
+  ASSERT_EQ(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
+                                   "target", &error),
+            ADBC_STATUS_OK);
+  EXPECT_EQ(AdbcStatementPrepare(&statement, &error),
+            ADBC_STATUS_INVALID_STATE);
+
+  ASSERT_EQ(AdbcStatementRelease(&statement, nullptr), ADBC_STATUS_OK);
+}
+
+TEST_F(AdbcDriverLiveTest, AutocommitDefaultsToTrue) {
+  TestConnection connection(quack_uri_);
+  char value[8] = {};
+  size_t length = sizeof(value);
+  AdbcError error = ADBC_ERROR_INIT;
+
+  EXPECT_EQ(AdbcConnectionGetOption(&connection.connection,
+                                    ADBC_CONNECTION_OPTION_AUTOCOMMIT, value,
+                                    &length, &error),
+            ADBC_STATUS_OK);
+  EXPECT_STREQ(value, ADBC_OPTION_VALUE_ENABLED);
+}
+
+TEST_F(AdbcDriverLiveTest, CommitRollbackRejectAutocommit) {
+  TestConnection connection(quack_uri_);
+  AdbcError error = ADBC_ERROR_INIT;
+
+  EXPECT_EQ(AdbcConnectionCommit(&connection.connection, &error),
+            ADBC_STATUS_INVALID_STATE);
+  EXPECT_EQ(AdbcConnectionRollback(&connection.connection, &error),
+            ADBC_STATUS_INVALID_STATE);
 }
 
 TEST(AdbcDriverTest, DriverExposesGetObjects) {
@@ -73,10 +211,9 @@ TEST(AdbcDriverTest, ErrorMessagesIncludeQuackPrefix) {
   AdbcStatement statement = {};
   AdbcError error = ADBC_ERROR_INIT;
 
-  EXPECT_EQ(AdbcStatementPrepare(&statement, &error),
+  EXPECT_EQ(AdbcStatementBind(&statement, nullptr, nullptr, &error),
             ADBC_STATUS_NOT_IMPLEMENTED);
-  ExpectErrorMessage(&error,
-                     "[quack] parameterized statements are not implemented");
+  ExpectErrorMessage(&error, "[quack] parameter binding is not implemented");
 }
 
 TEST(AdbcDriverTest, HelperErrorMessagesIncludeQuackPrefix) {
@@ -104,7 +241,7 @@ TEST(AdbcDriverTest, PropagatedErrorMessagesIncludeQuackPrefix) {
   ASSERT_EQ(AdbcDatabaseRelease(&database, nullptr), ADBC_STATUS_OK);
 }
 
-TEST(AdbcDriverTest, DatabaseInitHandlesManagerExtendedError) {
+TEST_F(AdbcDriverLiveTest, DatabaseInitHandlesManagerExtendedError) {
   AdbcDriver driver = {};
   ASSERT_EQ(AdbcDriverInit(ADBC_VERSION_1_1_0, &driver, nullptr),
             ADBC_STATUS_OK);
@@ -117,9 +254,7 @@ TEST(AdbcDriverTest, DatabaseInitHandlesManagerExtendedError) {
 
   ASSERT_EQ(AdbcDatabaseNew(&database, &error), ADBC_STATUS_OK);
   EXPECT_EQ(database.private_driver, &driver);
-  ASSERT_EQ(AdbcDatabaseSetOption(&database, "uri",
-                                  "quack://localhost:9494/?token=quack-secret",
-                                  &error),
+  ASSERT_EQ(AdbcDatabaseSetOption(&database, "uri", quack_uri_.c_str(), &error),
             ADBC_STATUS_OK);
   EXPECT_EQ(AdbcDatabaseInit(&database, &error), ADBC_STATUS_OK);
   EXPECT_EQ(database.private_driver, &driver);
