@@ -60,6 +60,9 @@ AdbcStatusCode DriverConnectionNew(AdbcConnection* connection,
                                    AdbcError* error);
 AdbcStatusCode DriverConnectionRelease(AdbcConnection* connection,
                                        AdbcError* error);
+AdbcStatusCode DriverConnectionSetOption(AdbcConnection* connection,
+                                         char const* key, char const* value,
+                                         AdbcError* error);
 AdbcStatusCode DriverStatementBind(AdbcStatement* statement, ArrowArray* values,
                                    ArrowSchema* schema, AdbcError* error);
 AdbcStatusCode DriverStatementBindStream(AdbcStatement* statement,
@@ -633,6 +636,25 @@ AdbcStatusCode RunDuckDbQuery(ConnectionState* state, std::string const& sql,
   return Ok(error);
 }
 
+std::string Lowercase(std::string_view value) {
+  std::string lowered(value);
+  for (char& c : lowered) {
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  return lowered;
+}
+
+bool IsNotFoundDuckDbError(duckdb_error_type error_type,
+                           std::string_view message) {
+  std::string const lower_message = Lowercase(message);
+  return (error_type == DUCKDB_ERROR_CATALOG &&
+          lower_message.find("not found") != std::string::npos) ||
+         lower_message.find("does not exist") != std::string::npos ||
+         lower_message.find("not found") != std::string::npos ||
+         lower_message.find("no such table") != std::string::npos ||
+         lower_message.find("no catalog + schema named") != std::string::npos;
+}
+
 AdbcStatusCode RunDuckDbQueryAllowNotFound(ConnectionState* state,
                                            std::string const& sql,
                                            AdbcError* error) {
@@ -645,17 +667,9 @@ AdbcStatusCode RunDuckDbQueryAllowNotFound(ConnectionState* state,
         result_error != nullptr ? result_error : "DuckDB query failed";
     auto const error_type =
         static_cast<int32_t>(duckdb_result_error_type(&result));
+    auto const result_error_type = duckdb_result_error_type(&result);
     duckdb_destroy_result(&result);
-    std::string const lower_message = [&message] {
-      std::string lowered = message;
-      for (char& c : lowered) {
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-      }
-      return lowered;
-    }();
-    if (lower_message.find("does not exist") != std::string::npos ||
-        lower_message.find("not found") != std::string::npos ||
-        lower_message.find("no such table") != std::string::npos) {
+    if (IsNotFoundDuckDbError(result_error_type, message)) {
       return NotFound(error, std::move(message), error_type);
     }
     return IoError(error, std::move(message), error_type);
@@ -668,6 +682,13 @@ AdbcStatusCode RunRemoteQuery(ConnectionState* state, std::string const& sql,
                               AdbcError* error) {
   return RunDuckDbQuery(state, adbc_driver_quack::BuildRemoteQuerySql(sql),
                         error);
+}
+
+AdbcStatusCode RunRemoteQueryAllowNotFound(ConnectionState* state,
+                                           std::string const& sql,
+                                           AdbcError* error) {
+  return RunDuckDbQueryAllowNotFound(
+      state, adbc_driver_quack::BuildRemoteQuerySql(sql), error);
 }
 
 AdbcStatusCode GetColumnDefinitions(ConnectionState* state,
@@ -985,6 +1006,7 @@ AdbcStatusCode InitDriver(int version, void* raw_driver, AdbcError* error) {
   driver->ConnectionGetObjects = DriverConnectionGetObjects;
   driver->ConnectionNew = DriverConnectionNew;
   driver->ConnectionRelease = DriverConnectionRelease;
+  driver->ConnectionSetOption = DriverConnectionSetOption;
 
   driver->StatementBind = DriverStatementBind;
   driver->StatementBindStream = DriverStatementBindStream;
@@ -1209,6 +1231,27 @@ AdbcStatusCode DriverConnectionGetObjects(
   return Ok(error);
 }
 
+AdbcStatusCode DriverConnectionSetOption(AdbcConnection* connection,
+                                         char const* key, char const* value,
+                                         AdbcError* error) {
+  ConnectionState* state = GetConnection(connection);
+  if (state == nullptr || !state->initialized) {
+    return InvalidState(error, "connection is not initialized");
+  }
+  if (key == nullptr || value == nullptr) {
+    return InvalidArgument(error,
+                           "connection option key and value must not be null");
+  }
+
+  if (std::strcmp(key, ADBC_CONNECTION_OPTION_CURRENT_CATALOG) == 0 ||
+      std::strcmp(key, ADBC_CONNECTION_OPTION_CURRENT_DB_SCHEMA) == 0) {
+    std::string const sql = "USE " + QuoteIdentifier(value);
+    return RunRemoteQueryAllowNotFound(state, sql, error);
+  }
+
+  return NotImplemented(error, "unsupported connection option");
+}
+
 AdbcStatusCode DriverStatementNew(AdbcConnection* connection,
                                   AdbcStatement* statement, AdbcError* error) {
   if (statement == nullptr) {
@@ -1392,6 +1435,13 @@ ADBC_EXPORT AdbcStatusCode AdbcConnectionInit(AdbcConnection* connection,
 ADBC_EXPORT AdbcStatusCode AdbcConnectionRelease(AdbcConnection* connection,
                                                  AdbcError* error) {
   return DriverConnectionRelease(connection, error);
+}
+
+ADBC_EXPORT AdbcStatusCode AdbcConnectionSetOption(AdbcConnection* connection,
+                                                   char const* key,
+                                                   char const* value,
+                                                   AdbcError* error) {
+  return DriverConnectionSetOption(connection, key, value, error);
 }
 
 ADBC_EXPORT AdbcStatusCode AdbcConnectionGetInfo(AdbcConnection* connection,

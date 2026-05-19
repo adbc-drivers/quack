@@ -21,3 +21,4 @@ CALL quack_serve(
     allow_other_hostname => true
 );
 CREATE TABLE IF NOT EXISTS quack_validation_ready AS SELECT 1 AS ok;
+CREATE SCHEMA IF NOT EXISTS quack_validation_secondary;

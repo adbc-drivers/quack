@@ -28,8 +28,8 @@ class QuackQuirks(model.DriverQuirks):
     short_version = "1.5"
     features = model.DriverFeatures(
         connection_get_table_schema=False,
-        connection_set_current_catalog=False,
-        connection_set_current_schema=False,
+        connection_set_current_catalog=True,
+        connection_set_current_schema=True,
         connection_transactions=False,
         current_catalog="quack-validation",
         current_schema="main",
@@ -41,6 +41,8 @@ class QuackQuirks(model.DriverQuirks):
         statement_prepare=False,
         statement_rows_affected=False,
         statement_rows_affected_ddl=False,
+        secondary_catalog="quack-validation",
+        secondary_schema="quack_validation_secondary",
         supported_xdbc_fields=[],
     )
     setup = model.DriverSetup(
