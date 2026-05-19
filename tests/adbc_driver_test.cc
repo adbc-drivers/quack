@@ -15,8 +15,21 @@
 #include <arrow-adbc/adbc.h>
 #include <gtest/gtest.h>
 
+#include <cstring>
+
 extern "C" AdbcStatusCode AdbcDriverInit(int version, void* driver,
                                          AdbcError* error);
+
+namespace {
+
+void ExpectErrorMessage(AdbcError* error, char const* message) {
+  ASSERT_NE(error->message, nullptr);
+  EXPECT_STREQ(error->message, message);
+  ASSERT_NE(error->release, nullptr);
+  error->release(error);
+}
+
+}  // namespace
 
 TEST(AdbcDriverTest, UnsupportedStatementApisReturnNotImplemented) {
   AdbcStatement statement = {};
@@ -54,6 +67,41 @@ TEST(AdbcDriverTest, BindStreamRejectsUninitializedStatement) {
 
   EXPECT_EQ(AdbcStatementBindStream(&statement, nullptr, &error),
             ADBC_STATUS_INVALID_STATE);
+}
+
+TEST(AdbcDriverTest, ErrorMessagesIncludeQuackPrefix) {
+  AdbcStatement statement = {};
+  AdbcError error = ADBC_ERROR_INIT;
+
+  EXPECT_EQ(AdbcStatementPrepare(&statement, &error),
+            ADBC_STATUS_NOT_IMPLEMENTED);
+  ExpectErrorMessage(&error,
+                     "[quack] parameterized statements are not implemented");
+}
+
+TEST(AdbcDriverTest, HelperErrorMessagesIncludeQuackPrefix) {
+  AdbcStatement statement = {};
+  AdbcError error = ADBC_ERROR_INIT;
+
+  EXPECT_EQ(AdbcStatementBindStream(&statement, nullptr, &error),
+            ADBC_STATUS_INVALID_STATE);
+  ExpectErrorMessage(&error, "[quack] statement is not initialized");
+}
+
+TEST(AdbcDriverTest, PropagatedErrorMessagesIncludeQuackPrefix) {
+  AdbcDatabase database = {};
+  AdbcError error = ADBC_ERROR_INIT;
+
+  ASSERT_EQ(AdbcDatabaseNew(&database, &error), ADBC_STATUS_OK);
+  EXPECT_EQ(AdbcDatabaseSetOption(&database, "uri", "quack://", &error),
+            ADBC_STATUS_INVALID_ARGUMENT);
+  ASSERT_NE(error.message, nullptr);
+  EXPECT_EQ(std::strncmp(error.message, "[quack] ", 8), 0);
+  EXPECT_NE(std::strstr(error.message, "host"), nullptr);
+  ASSERT_NE(error.release, nullptr);
+  error.release(&error);
+
+  ASSERT_EQ(AdbcDatabaseRelease(&database, nullptr), ADBC_STATUS_OK);
 }
 
 TEST(AdbcDriverTest, DatabaseInitHandlesManagerExtendedError) {

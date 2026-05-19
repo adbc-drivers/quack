@@ -116,6 +116,8 @@ struct DriverState {
   int version = ADBC_VERSION_1_1_0;
 };
 
+constexpr char kErrorPrefix[] = "[quack]";
+
 void ReleaseError(AdbcError* error) {
   if (error == nullptr) {
     return;
@@ -151,17 +153,30 @@ void ClearError(AdbcError* error) {
   }
 }
 
+std::string FormatErrorMessage(std::string message) {
+  if (message.starts_with(kErrorPrefix)) {
+    return message;
+  }
+  if (message.empty()) {
+    return kErrorPrefix;
+  }
+  return std::string{kErrorPrefix} + " " + message;
+}
+
 AdbcStatusCode SetError(AdbcError* error, AdbcStatusCode status,
                         std::string message, int32_t vendor_code = 0) {
   if (error == nullptr) {
     return status;
   }
   ClearError(error);
-  char* error_message = static_cast<char*>(std::malloc(message.size() + 1));
+  std::string formatted_message = FormatErrorMessage(std::move(message));
+  char* error_message =
+      static_cast<char*>(std::malloc(formatted_message.size() + 1));
   if (error_message == nullptr) {
     return status;
   }
-  std::memcpy(error_message, message.c_str(), message.size() + 1);
+  std::memcpy(error_message, formatted_message.c_str(),
+              formatted_message.size() + 1);
   error->message = error_message;
   error->vendor_code = vendor_code;
   std::memset(error->sqlstate, 0, sizeof(error->sqlstate));
@@ -171,36 +186,45 @@ AdbcStatusCode SetError(AdbcError* error, AdbcStatusCode status,
   return status;
 }
 
+AdbcStatusCode StatusError(AdbcError* error, AdbcStatusCode status,
+                           std::string message, int32_t vendor_code = 0) {
+  return SetError(error, status, std::move(message), vendor_code);
+}
+
 AdbcStatusCode Ok(AdbcError* error) {
   ClearError(error);
   return ADBC_STATUS_OK;
 }
 
 AdbcStatusCode InvalidArgument(AdbcError* error, std::string message) {
-  return SetError(error, ADBC_STATUS_INVALID_ARGUMENT, std::move(message));
+  return StatusError(error, ADBC_STATUS_INVALID_ARGUMENT, std::move(message));
 }
 
 AdbcStatusCode InvalidData(AdbcError* error, std::string message) {
-  return SetError(error, ADBC_STATUS_INVALID_DATA, std::move(message));
+  return StatusError(error, ADBC_STATUS_INVALID_DATA, std::move(message));
 }
 
 AdbcStatusCode InvalidState(AdbcError* error, std::string message) {
-  return SetError(error, ADBC_STATUS_INVALID_STATE, std::move(message));
+  return StatusError(error, ADBC_STATUS_INVALID_STATE, std::move(message));
 }
 
 AdbcStatusCode NotImplemented(AdbcError* error, std::string message) {
-  return SetError(error, ADBC_STATUS_NOT_IMPLEMENTED, std::move(message));
+  return StatusError(error, ADBC_STATUS_NOT_IMPLEMENTED, std::move(message));
 }
 
 AdbcStatusCode NotFound(AdbcError* error, std::string message,
                         int32_t vendor_code = 0) {
-  return SetError(error, ADBC_STATUS_NOT_FOUND, std::move(message),
-                  vendor_code);
+  return StatusError(error, ADBC_STATUS_NOT_FOUND, std::move(message),
+                     vendor_code);
 }
 
 AdbcStatusCode IoError(AdbcError* error, std::string message,
                        int32_t vendor_code = 0) {
-  return SetError(error, ADBC_STATUS_IO, std::move(message), vendor_code);
+  return StatusError(error, ADBC_STATUS_IO, std::move(message), vendor_code);
+}
+
+AdbcStatusCode Unknown(AdbcError* error, std::string message) {
+  return StatusError(error, ADBC_STATUS_UNKNOWN, std::move(message));
 }
 
 AdbcStatusCode ReleaseDriver(AdbcDriver* driver, AdbcError* error) {
@@ -989,8 +1013,7 @@ AdbcStatusCode InitDriver(int version, void* raw_driver, AdbcError* error) {
 
   auto* driver_state = new (std::nothrow) DriverState{version};
   if (driver_state == nullptr) {
-    return SetError(error, ADBC_STATUS_UNKNOWN,
-                    "failed to allocate driver state");
+    return Unknown(error, "failed to allocate driver state");
   }
   driver->private_data = driver_state;
   driver->release = ReleaseDriver;
@@ -1163,7 +1186,7 @@ AdbcStatusCode DriverConnectionGetInfo(AdbcConnection* connection,
   auto const result = adbc_driver_quack::BuildGetInfoStream(
       remote_vendor_version, info_codes, info_codes_length, out);
   if (result.status != ADBC_STATUS_OK) {
-    return SetError(error, result.status, result.message);
+    return StatusError(error, result.status, result.message);
   }
   return Ok(error);
 }
@@ -1226,7 +1249,8 @@ AdbcStatusCode DriverConnectionGetObjects(
       state->connection, adbc_driver_quack::BuildRemoteQuerySql(query), out,
       nullptr);
   if (result.status != ADBC_STATUS_OK) {
-    return SetError(error, result.status, result.message, result.vendor_code);
+    return StatusError(error, result.status, result.message,
+                       result.vendor_code);
   }
   return Ok(error);
 }
@@ -1306,7 +1330,8 @@ AdbcStatusCode DriverStatementExecuteQuery(AdbcStatement* statement,
     auto const result = adbc_driver_quack::ExecuteDuckDbArrowQuery(
         state->connection->connection, remote_sql, out, rows_affected);
     if (result.status != ADBC_STATUS_OK) {
-      return SetError(error, result.status, result.message, result.vendor_code);
+      return StatusError(error, result.status, result.message,
+                         result.vendor_code);
     }
     return Ok(error);
   }
