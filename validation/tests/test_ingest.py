@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import adbc_driver_manager.dbapi
 import adbc_drivers_validation.tests.ingest as ingest_tests
+import pyarrow
+import pytest
+from adbc_drivers_validation.utils import execute_query_without_prepare
 
 from .quack import get_quirks
 
@@ -23,4 +27,32 @@ def pytest_generate_tests(metafunc) -> None:
 
 
 class TestIngest(ingest_tests.TestIngest):
-    pass
+    @pytest.mark.requires_features(["statement_bulk_ingest", "connection_transactions"])
+    def test_bulk_ingest_rolls_back_with_manual_transaction(
+        self, driver, driver_path: str, db_kwargs: dict
+    ) -> None:
+        table_name = "test_bulk_ingest_manual_rollback"
+        data = pyarrow.table({"idx": [1], "value": ["a"]})
+
+        with adbc_driver_manager.dbapi.connect(
+            driver=driver_path, db_kwargs=db_kwargs, autocommit=True
+        ) as cleanup_conn:
+            with cleanup_conn.cursor() as cursor:
+                driver.try_drop_table(cursor, table_name=table_name)
+
+        with adbc_driver_manager.dbapi.connect(
+            driver=driver_path, db_kwargs=db_kwargs, autocommit=False
+        ) as conn:
+            with conn.cursor() as cursor:
+                cursor.adbc_ingest(table_name, data, mode="create")
+
+            conn.rollback()
+
+            with conn.cursor() as cursor:
+                with pytest.raises(adbc_driver_manager.dbapi.Error) as excinfo:
+                    execute_query_without_prepare(
+                        cursor,
+                        f"SELECT * FROM {driver.quote_identifier(table_name)}",
+                    )
+
+        assert driver.is_table_not_found(table_name, excinfo.value)
