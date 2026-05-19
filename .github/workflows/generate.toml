@@ -21,7 +21,7 @@ private = false
 subdir = "."
 
 [lang.script.build]
-additional-make-args = ["TOOLCHAIN=cpp"]
+additional-make-args = ["TOOLCHAIN=cpp", "MANYLINUX=manylinux_2_28"]
 
 [lang.script.validation]
 configs = [
