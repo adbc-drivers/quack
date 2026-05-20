@@ -19,7 +19,9 @@
 #include <duckdb/common/arrow/arrow_converter.hpp>
 #include <duckdb/common/types/data_chunk.hpp>
 #include <duckdb/function/table/arrow/arrow_duck_schema.hpp>
+#include <duckdb/main/client_context.hpp>
 #include <duckdb/main/connection.hpp>
+#include <duckdb/main/pending_query_result.hpp>
 #include <duckdb/main/query_result.hpp>
 #include <new>
 #include <string>
@@ -29,7 +31,11 @@ namespace adbc_driver_quack {
 namespace {
 
 struct DuckDbArrowStreamState {
+  duckdb::unique_ptr<duckdb::PendingQueryResult> pending_result;
   duckdb::unique_ptr<duckdb::QueryResult> result;
+  duckdb::vector<duckdb::LogicalType> types;
+  duckdb::vector<duckdb::string> names;
+  duckdb::ClientProperties client_properties;
   duckdb::unordered_map<
       duckdb::idx_t, duckdb::shared_ptr<duckdb::ArrowTypeExtensionData> const>
       extension_types;
@@ -75,16 +81,60 @@ std::string DuckDbErrorMessage(duckdb::QueryResult const* result,
   return error;
 }
 
+std::string DuckDbErrorMessage(duckdb::PendingQueryResult const* result,
+                               std::string fallback) {
+  if (result == nullptr || !result->HasError()) {
+    return fallback;
+  }
+  std::string const& error = result->GetError();
+  if (error.empty()) {
+    return fallback;
+  }
+  return error;
+}
+
+int EnsureResultReady(DuckDbArrowStreamState* state) {
+  if (state->result != nullptr) {
+    return 0;
+  }
+  if (state->pending_result == nullptr) {
+    state->last_error = "DuckDB query result is not available";
+    return EINVAL;
+  }
+  try {
+    state->result = state->pending_result->Execute();
+    state->pending_result.reset();
+  } catch (duckdb::Exception const& ex) {
+    state->last_error = ex.what();
+    return EIO;
+  } catch (std::exception const& ex) {
+    state->last_error = ex.what();
+    return EIO;
+  } catch (...) {
+    state->last_error = "unknown DuckDB query execution error";
+    return EIO;
+  }
+  if (state->result == nullptr) {
+    state->last_error = "DuckDB query returned no result";
+    return EIO;
+  }
+  if (state->result->HasError()) {
+    state->last_error =
+        DuckDbErrorMessage(state->result.get(), "DuckDB query failed");
+    return EIO;
+  }
+  return 0;
+}
+
 int StreamGetSchema(ArrowArrayStream* stream, ArrowSchema* out) {
   auto* state = GetState(stream);
-  if (state == nullptr || state->result == nullptr || out == nullptr) {
+  if (state == nullptr || out == nullptr) {
     return EINVAL;
   }
   std::memset(out, 0, sizeof(*out));
   try {
-    duckdb::ArrowConverter::ToArrowSchema(out, state->result->types,
-                                          state->result->names,
-                                          state->result->client_properties);
+    duckdb::ArrowConverter::ToArrowSchema(out, state->types, state->names,
+                                          state->client_properties);
   } catch (duckdb::Exception const& ex) {
     state->last_error = ex.what();
     return EIO;
@@ -101,10 +151,15 @@ int StreamGetSchema(ArrowArrayStream* stream, ArrowSchema* out) {
 
 int StreamGetNext(ArrowArrayStream* stream, ArrowArray* out) {
   auto* state = GetState(stream);
-  if (state == nullptr || state->result == nullptr || out == nullptr) {
+  if (state == nullptr || out == nullptr) {
     return EINVAL;
   }
   std::memset(out, 0, sizeof(*out));
+
+  int const result_status = EnsureResultReady(state);
+  if (result_status != 0) {
+    return result_status;
+  }
 
   duckdb::ErrorData& fetch_error = state->result->GetErrorObject();
   duckdb::unique_ptr<duckdb::DataChunk> chunk;
@@ -133,8 +188,8 @@ int StreamGetNext(ArrowArrayStream* stream, ArrowArray* out) {
   }
 
   try {
-    duckdb::ArrowConverter::ToArrowArray(
-        *chunk, out, state->result->client_properties, state->extension_types);
+    duckdb::ArrowConverter::ToArrowArray(*chunk, out, state->client_properties,
+                                         state->extension_types);
   } catch (duckdb::Exception const& ex) {
     state->last_error = ex.what();
     return EIO;
@@ -183,12 +238,12 @@ DuckDbArrowQueryResult ExecuteDuckDbStreamingArrowQuery(
 
   auto* duckdb_connection_ptr =
       reinterpret_cast<duckdb::Connection*>(connection);
-  duckdb::unique_ptr<duckdb::QueryResult> query_result;
+  duckdb::unique_ptr<duckdb::PendingQueryResult> pending_result;
   try {
     // DuckDB allows one active StreamQueryResult per connection. ADBC callers
     // must consume or release the returned ArrowArrayStream before issuing
     // another query on the same connection.
-    query_result = duckdb_connection_ptr->SendQuery(
+    pending_result = duckdb_connection_ptr->PendingQuery(
         std::string(sql), duckdb::QueryResultOutputType::ALLOW_STREAMING);
   } catch (duckdb::Exception const& ex) {
     return Error(ADBC_STATUS_IO, ex.what());
@@ -198,13 +253,14 @@ DuckDbArrowQueryResult ExecuteDuckDbStreamingArrowQuery(
     return Error(ADBC_STATUS_IO, "unknown DuckDB query error");
   }
 
-  if (query_result == nullptr) {
-    return Error(ADBC_STATUS_IO, "DuckDB query returned no result");
+  if (pending_result == nullptr) {
+    return Error(ADBC_STATUS_IO, "DuckDB query returned no pending result");
   }
-  if (query_result->HasError()) {
-    return Error(ADBC_STATUS_IO,
-                 DuckDbErrorMessage(query_result.get(), "DuckDB query failed"),
-                 static_cast<int32_t>(query_result->GetErrorType()));
+  if (pending_result->HasError()) {
+    return Error(
+        ADBC_STATUS_IO,
+        DuckDbErrorMessage(pending_result.get(), "DuckDB query failed"),
+        static_cast<int32_t>(pending_result->GetErrorType()));
   }
 
   if (rows_affected != nullptr) {
@@ -215,12 +271,15 @@ DuckDbArrowQueryResult ExecuteDuckDbStreamingArrowQuery(
     return {};
   }
 
+  duckdb::ClientProperties client_properties =
+      duckdb_connection_ptr->context->GetClientProperties();
+
   duckdb::unordered_map<
       duckdb::idx_t, duckdb::shared_ptr<duckdb::ArrowTypeExtensionData> const>
       extension_types;
   try {
     extension_types = duckdb::ArrowTypeExtensionData::GetExtensionTypes(
-        *query_result->client_properties.client_context, query_result->types);
+        *client_properties.client_context, pending_result->types);
   } catch (duckdb::Exception const& ex) {
     return Error(ADBC_STATUS_IO, ex.what());
   } catch (std::exception const& ex) {
@@ -230,8 +289,16 @@ DuckDbArrowQueryResult ExecuteDuckDbStreamingArrowQuery(
                  "unknown error while preparing DuckDB Arrow conversions");
   }
 
-  auto* state = new (std::nothrow) DuckDbArrowStreamState{
-      std::move(query_result), std::move(extension_types), {}};
+  duckdb::vector<duckdb::LogicalType> types = pending_result->types;
+  duckdb::vector<duckdb::string> names = pending_result->names;
+  auto* state =
+      new (std::nothrow) DuckDbArrowStreamState{std::move(pending_result),
+                                                nullptr,
+                                                std::move(types),
+                                                std::move(names),
+                                                std::move(client_properties),
+                                                std::move(extension_types),
+                                                {}};
   if (state == nullptr) {
     return Error(ADBC_STATUS_UNKNOWN, "failed to allocate DuckDB Arrow stream");
   }
