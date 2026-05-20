@@ -35,8 +35,8 @@ root with CMake. There is no `rust/` or `go/` implementation directory.
   and bulk ingest.
 - `src/get_info_stream.cc` builds the Arrow C Stream result for
   `AdbcConnectionGetInfo` with nanoarrow.
-- `src/duckdb_arrow_stream.cc` adapts DuckDB Arrow query results to the Arrow C
-  Stream interface.
+- `src/duckdb_arrow_stream.cc` adapts DuckDB streaming query results to the
+  Arrow C Stream interface.
 - `src/quack_uri.cc` parses `quack://...` connection URIs.
 - `src/sql_escape.cc` builds escaped DuckDB SQL string literals and remote
   query wrappers.
@@ -72,6 +72,12 @@ Statement execution wraps caller SQL with Quack remote execution through
 `BuildRemoteQuerySql`. Bulk ingest scans an Arrow stream into local DuckDB,
 creates or updates the remote table through Quack, clears Quack metadata cache,
 and inserts into `remote.<schema>.<table>`.
+
+Result-producing statement execution and GetObjects use DuckDB streaming query
+results and convert each fetched DuckDB chunk to Arrow on demand. Callers must
+consume or release a returned Arrow stream before issuing another query on the
+same connection because DuckDB permits only one active streaming query result
+per connection.
 
 ## Metadata APIs
 

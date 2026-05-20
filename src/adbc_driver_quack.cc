@@ -1303,7 +1303,7 @@ AdbcStatusCode DriverConnectionGetObjects(
     return InvalidArgument(error, "invalid GetObjects depth");
   }
 
-  auto const result = adbc_driver_quack::ExecuteDuckDbArrowQuery(
+  auto const result = adbc_driver_quack::ExecuteDuckDbStreamingArrowQuery(
       state->connection, adbc_driver_quack::BuildRemoteQuerySql(query), out,
       nullptr);
   if (result.status != ADBC_STATUS_OK) {
@@ -1414,7 +1414,7 @@ AdbcStatusCode DriverStatementExecuteQuery(AdbcStatement* statement,
   std::string const remote_sql =
       adbc_driver_quack::BuildRemoteQuerySql(state->sql);
   if (out != nullptr) {
-    auto const result = adbc_driver_quack::ExecuteDuckDbArrowQuery(
+    auto const result = adbc_driver_quack::ExecuteDuckDbStreamingArrowQuery(
         state->connection->connection, remote_sql, out, rows_affected);
     if (result.status != ADBC_STATUS_OK) {
       return StatusError(error, result.status, result.message,
