@@ -29,9 +29,8 @@ struct DuckDbArrowQueryResult {
   int32_t vendor_code = 0;
 };
 
-DuckDbArrowQueryResult ExecuteDuckDbArrowQuery(duckdb_connection connection,
-                                               std::string_view sql,
-                                               ArrowArrayStream* out,
-                                               int64_t* rows_affected);
+DuckDbArrowQueryResult ExecuteDuckDbStreamingArrowQuery(
+    duckdb_connection connection, std::string_view sql, ArrowArrayStream* out,
+    int64_t* rows_affected);
 
 }  // namespace adbc_driver_quack
