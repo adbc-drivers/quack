@@ -12,8 +12,6 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-FORCE INSTALL quack FROM core_nightly;
-LOAD quack;
 CALL quack_serve(
     'quack:0.0.0.0:9494',
     token => 'quack-secret',

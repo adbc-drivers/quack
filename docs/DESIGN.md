@@ -25,9 +25,10 @@ root with CMake. There is no `rust/` or `go/` implementation directory.
 ## Project Shape
 
 - `CMakeLists.txt` is the root project. It requires CMake 4, uses C++20,
-  finds ZLIB, OpenSSL, and CURL, fetches DuckDB, DuckDB Quack, nanoarrow, and
-  uriparser with `FetchContent`, configures generated build metadata, and adds
-  `src/` and `tests/`.
+  finds ZLIB, OpenSSL, and CURL, fetches DuckDB, nanoarrow, and uriparser with
+  `FetchContent`, builds DuckDB with its bundled Quack and HTTPFS extension
+  configurations, configures generated build metadata, and adds `src/` and
+  `tests/`.
 - `src/CMakeLists.txt` builds `adbc_driver_quack_helpers` and the shared
   library `adbc_driver_quack`.
 - `src/adbc_driver_quack.cc` owns the exported ADBC C API entry points, driver
@@ -55,10 +56,10 @@ root with CMake. There is no `rust/` or `go/` implementation directory.
 quack://HOST[:PORT]/?token=TOKEN
 ```
 
-`AdbcConnectionInit` opens an in-memory local DuckDB database, loads the
-statically linked Quack extension, attaches the remote endpoint as the fixed
-catalog name `remote`, and stores the live DuckDB connection in
-`ConnectionState`.
+`AdbcConnectionInit` opens an in-memory local DuckDB database, attaches the
+remote endpoint as the fixed catalog name `remote`, and stores the live DuckDB
+connection in `ConnectionState`. DuckDB 1.5.3 bundles Quack, so the driver does
+not install, build, or explicitly load the extension.
 
 Validation defaults to a Quack server at:
 
