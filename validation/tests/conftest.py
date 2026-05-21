@@ -32,7 +32,7 @@ from .quack import get_quirks
 
 def pytest_addoption(parser):
     adbc_drivers_validation.tests.conftest.pytest_addoption(parser)
-    parser.addoption("--vendor-version", action="store", default="1.5.3")
+    parser.addoption("--vendor-version", action="store", default="1.5")
 
 
 @pytest.fixture(scope="session")
