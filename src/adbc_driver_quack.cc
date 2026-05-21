@@ -1138,12 +1138,6 @@ AdbcStatusCode DriverConnectionInit(AdbcConnection* connection,
     return IoError(error, "failed to connect local DuckDB client");
   }
 
-  AdbcStatusCode status = RunDuckDbQuery(connection_state, "LOAD quack", error);
-  if (status != ADBC_STATUS_OK) {
-    CloseConnectionState(connection_state);
-    return status;
-  }
-
   std::string attach = "ATTACH " +
                        adbc_driver_quack::DuckDbSqlStringLiteral(
                            database_state->parsed_uri.endpoint) +
@@ -1154,7 +1148,7 @@ AdbcStatusCode DriverConnectionInit(AdbcConnection* connection,
         database_state->parsed_uri.token);
   }
   attach += ")";
-  status = RunDuckDbQuery(connection_state, attach, error);
+  AdbcStatusCode status = RunDuckDbQuery(connection_state, attach, error);
   if (status != ADBC_STATUS_OK) {
     CloseConnectionState(connection_state);
     return status;

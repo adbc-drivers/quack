@@ -25,5 +25,5 @@ additional-make-args = ["TOOLCHAIN=cpp", "MANYLINUX=manylinux_2_28"]
 
 [lang.script.validation]
 configs = [
-  { service_name = "test-service", vendor_version = "1.5.2" },
+  { service_name = "test-service", vendor_version = "1.5" },
 ]

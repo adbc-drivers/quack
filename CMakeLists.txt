@@ -21,7 +21,7 @@ project(
   LANGUAGES C CXX)
 
 set(ADBC_DRIVER_QUACK_DUCKDB_VERSION
-    "1.5.2"
+    "1.5.3"
     CACHE STRING "DuckDB version used by the Quack driver")
 set(ADBC_DRIVER_QUACK_DUCKDB_TAG "v${ADBC_DRIVER_QUACK_DUCKDB_VERSION}")
 set(ADBC_DRIVER_QUACK_NANOARROW_VERSION
@@ -91,16 +91,6 @@ FetchContent_Declare(
 )
 
 FetchContent_Declare(
-  adbc_driver_quack_quack
-  GIT_REPOSITORY https://github.com/duckdb/duckdb-quack.git
-  GIT_TAG v1.5-variegata
-  GIT_SUBMODULES ""
-  PATCH_COMMAND
-    ${CMAKE_COMMAND} -E chdir <SOURCE_DIR> git apply --ignore-whitespace
-    ${CMAKE_CURRENT_LIST_DIR}/cmake/patches/quack-parent-duckdb-includes.patch
-    SOURCE_SUBDIR cmake/skip-add-subdirectory)
-
-FetchContent_Declare(
   uriparser
   GIT_REPOSITORY https://github.com/uriparser/uriparser.git
   GIT_TAG uriparser-0.9.8)
@@ -140,14 +130,18 @@ set(ENABLE_UNITTEST_CPP_TESTS
 set(BUILD_BENCHMARKS
     OFF
     CACHE BOOL "" FORCE)
+set(BUILD_EXTENSIONS
+    "quack;httpfs"
+    CACHE STRING "" FORCE)
 set(SKIP_EXTENSIONS
     parquet
     CACHE STRING "" FORCE)
-set(DUCKDB_EXTENSION_CONFIGS
-    "${CMAKE_CURRENT_LIST_DIR}/cmake/duckdb/quack_extension_config.cmake"
-    CACHE STRING "" FORCE)
+set(ADBC_DRIVER_QUACK_PREVIOUS_HTTPFS_PROJECT_INCLUDE
+    "${CMAKE_PROJECT_HTTPFsExtension_INCLUDE}")
+set(CMAKE_PROJECT_HTTPFsExtension_INCLUDE
+    "${CMAKE_CURRENT_LIST_DIR}/cmake/duckdb/httpfs_project_include.cmake")
 
-FetchContent_MakeAvailable(adbc_driver_quack_quack duckdb nanoarrow uriparser)
+FetchContent_MakeAvailable(duckdb nanoarrow uriparser)
 
 set(ADBC_DRIVER_QUACK_DUCKDB_INCLUDE_DIR "${duckdb_SOURCE_DIR}/src/include")
 
