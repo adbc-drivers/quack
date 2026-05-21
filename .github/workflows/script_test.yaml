@@ -266,7 +266,6 @@ jobs:
 
   build:
     name: "Build quack/${{ matrix.platform }}_${{ matrix.arch }}"
-    needs: test
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: true

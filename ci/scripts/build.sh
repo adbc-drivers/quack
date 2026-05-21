@@ -54,6 +54,8 @@ case "$platform" in
 esac
 
 case "${platform}/${arch}" in
+  # vcpkg's Unix triplets already use static library linkage. Windows default
+  # triplets use DLL linkage, so select the static Windows triplets explicitly.
   linux/amd64)
     vcpkg_triplet="x64-linux"
     ;;
@@ -67,10 +69,10 @@ case "${platform}/${arch}" in
     vcpkg_triplet="arm64-osx"
     ;;
   windows/amd64)
-    vcpkg_triplet="x64-windows"
+    vcpkg_triplet="x64-windows-static"
     ;;
   windows/arm64)
-    vcpkg_triplet="arm64-windows"
+    vcpkg_triplet="arm64-windows-static"
     ;;
   *)
     printf 'unsupported platform/architecture: %s/%s\n' "$platform" "$arch" >&2
