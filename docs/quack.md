@@ -23,6 +23,10 @@
 This driver provides ADBC access to a DuckDB server exposed through the Quack
 remote protocol.
 
+:::{note}
+This project is not associated with DuckDB Labs.
+:::
+
 ## Connecting
 
 ```python
