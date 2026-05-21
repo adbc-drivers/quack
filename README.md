@@ -16,38 +16,28 @@ limitations under the License.
 
 # ADBC Driver for DuckDB Quack
 
-This repository contains a C++ ADBC driver for DuckDB's Quack remote protocol.
+This repository contains [ADBC drivers](https://arrow.apache.org/adbc/) for
+[DuckDB Quack](https://duckdb.org/quack/), implemented in C++.
 
-## Build
+This project is not associated with DuckDB Labs.
 
-Use the repository root as the working directory. The supported local Linux
-amd64 build path is:
+## Installation
 
-```bash
-./ci/scripts/build.sh test linux amd64
+Pre-packaged builds of the drivers in this repo have been made available for
+various platforms from the [Columnar](https://columnar.tech) CDN. These can be
+installed by any tool that supports [ADBC](https://arrow.apache.org/adbc/)
+Driver Manifests, such as [dbc](https://columnar.tech/dbc):
+
+```sh
+dbc install quack --pre
 ```
 
-The build script requires a vcpkg toolchain via `CMAKE_TOOLCHAIN_FILE`,
-`VCPKG_ROOT`, or `VCPKG_INSTALLATION_ROOT`. It configures the CI build under
-`build/ci-test-linux-amd64`, builds the driver and C++ tests, and copies the
-driver library to `build/libadbc_driver_quack.so`.
+See [Building](#building) if you would rather build the drivers yourself.
 
-## Test
+## Building
 
-Run C++ tests after building:
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-```bash
-./ci/scripts/test.sh linux amd64
-```
+## Contributing
 
-Validation tests use the copied driver library and the Quack server defined in
-`compose.yaml`:
-
-```bash
-pixi run validate --collect-only
-pixi run validate -k connection
-pixi run validate
-```
-
-Rebuild with `./ci/scripts/build.sh test linux amd64` before running
-validation.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
