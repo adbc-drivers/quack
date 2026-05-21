@@ -136,6 +136,10 @@ set(BUILD_EXTENSIONS
 set(SKIP_EXTENSIONS
     parquet
     CACHE STRING "" FORCE)
+set(ADBC_DRIVER_QUACK_PREVIOUS_HTTPFS_PROJECT_INCLUDE
+    "${CMAKE_PROJECT_HTTPFsExtension_INCLUDE}")
+set(CMAKE_PROJECT_HTTPFsExtension_INCLUDE
+    "${CMAKE_CURRENT_LIST_DIR}/cmake/duckdb/httpfs_project_include.cmake")
 
 FetchContent_MakeAvailable(duckdb nanoarrow uriparser)
 
