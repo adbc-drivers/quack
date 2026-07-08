@@ -27,6 +27,14 @@ remote protocol.
 This project is not associated with DuckDB Labs.
 :::
 
+## Installation & Quickstart
+
+The driver can be installed with [dbc](https://docs.columnar.tech/dbc):
+
+```bash
+dbc install --pre quack
+```
+
 ## Connecting
 
 ```python
