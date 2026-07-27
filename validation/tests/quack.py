@@ -23,7 +23,7 @@ class QuackQuirks(model.DriverQuirks):
     driver = "adbc_driver_quack"
     driver_name = "ADBC Driver for DuckDB Quack"
     vendor_name = "DuckDB Quack"
-    vendor_version = "1.5.4"
+    vendor_version = "1.5.5"
     short_version = "1.5"
     features = model.DriverFeatures(
         connection_get_table_schema=False,

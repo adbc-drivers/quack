@@ -58,7 +58,7 @@ quack://HOST[:PORT]/?token=TOKEN
 
 `AdbcConnectionInit` opens an in-memory local DuckDB database, attaches the
 remote endpoint as the fixed catalog name `remote`, and stores the live DuckDB
-connection in `ConnectionState`. DuckDB 1.5.4 bundles Quack, so the driver does
+connection in `ConnectionState`. DuckDB bundles Quack, so the driver does
 not install, build, or explicitly load the extension.
 
 Validation defaults to a Quack server at:
