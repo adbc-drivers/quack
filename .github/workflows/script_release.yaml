@@ -63,14 +63,14 @@ jobs:
           # https://github.com/actions/runner-images/issues/2840
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
 
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
           submodules: 'recursive'
 
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f  # v0.10.0
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347  # v0.10.1
         with:
           pixi-version: v0.72.0
           run-install: false
@@ -155,14 +155,14 @@ jobs:
           # https://github.com/actions/runner-images/issues/2840
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
 
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
           submodules: 'recursive'
 
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f  # v0.10.0
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347  # v0.10.1
         with:
           pixi-version: v0.72.0
           run-install: false
@@ -274,14 +274,14 @@ jobs:
       packages: read
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
           submodules: 'recursive'
 
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f  # v0.10.0
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347  # v0.10.1
         with:
           pixi-version: v0.72.0
           run-install: false
@@ -330,14 +330,14 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
           submodules: 'recursive'
 
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f  # v0.10.0
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347  # v0.10.1
         with:
           pixi-version: v0.72.0
           run-install: false
@@ -406,11 +406,11 @@ jobs:
           - { platform: windows, arch: amd64, runner: windows-latest }
     steps:
       # for now, install dbc from main
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           cache: false
           go-version: 'stable'
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f  # v0.10.0
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347  # v0.10.1
         with:
           pixi-version: v0.72.0
           run-install: false
@@ -431,7 +431,7 @@ jobs:
           echo "Installing ${driver_pkg}"
           ./dbc install --no-verify "${driver_pkg}"
           echo "Installed ${driver_pkg}"
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -465,13 +465,13 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
           submodules: 'recursive'
 
-      - uses: prefix-dev/setup-pixi@a09b6247153796b190642a2b53fac4241043cf6f  # v0.10.0
+      - uses: prefix-dev/setup-pixi@f00437f565399d418b0acc85936d12c1fb668347  # v0.10.1
         with:
           pixi-version: v0.72.0
           run-install: false
