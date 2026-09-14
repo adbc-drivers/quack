@@ -650,8 +650,31 @@ void CloseConnectionState(ConnectionState* state) {
   state->transaction_active = false;
 }
 
-AdbcStatusCode RunDuckDbQuery(ConnectionState* state, std::string const& sql,
-                              AdbcError* error) {
+enum class IngestConflict { None, Create, Append };
+
+AdbcStatusCode DuckDbQueryError(AdbcError* error, duckdb_error_type error_type,
+                                std::string message,
+                                IngestConflict ingest_conflict) {
+  bool const create_conflict =
+      ingest_conflict == IngestConflict::Create &&
+      (error_type == DUCKDB_ERROR_CATALOG ||
+       error_type == DUCKDB_ERROR_INVALID_INPUT) &&
+      message.find("already exists") != std::string::npos;
+  bool const schema_conflict =
+      ingest_conflict == IngestConflict::Append &&
+      error_type == DUCKDB_ERROR_BINDER &&
+      message.find(" columns but ") != std::string::npos &&
+      message.find(" values were supplied") != std::string::npos;
+  if (create_conflict || schema_conflict) {
+    return StatusError(error, ADBC_STATUS_ALREADY_EXISTS, std::move(message),
+                       static_cast<int32_t>(error_type));
+  }
+  return IoError(error, std::move(message), static_cast<int32_t>(error_type));
+}
+
+AdbcStatusCode RunDuckDbQuery(
+    ConnectionState* state, std::string const& sql, AdbcError* error,
+    IngestConflict ingest_conflict = IngestConflict::None) {
   duckdb_result result;
   duckdb_state const query_state =
       duckdb_query(state->connection, sql.c_str(), &result);
@@ -659,10 +682,10 @@ AdbcStatusCode RunDuckDbQuery(ConnectionState* state, std::string const& sql,
     char const* result_error = duckdb_result_error(&result);
     std::string message =
         result_error != nullptr ? result_error : "DuckDB query failed";
-    auto const error_type =
-        static_cast<int32_t>(duckdb_result_error_type(&result));
+    auto const error_type = duckdb_result_error_type(&result);
     duckdb_destroy_result(&result);
-    return IoError(error, std::move(message), error_type);
+    return DuckDbQueryError(error, error_type, std::move(message),
+                            ingest_conflict);
   }
   duckdb_destroy_result(&result);
   return Ok(error);
@@ -687,9 +710,9 @@ bool IsNotFoundDuckDbError(duckdb_error_type error_type,
          lower_message.find("no catalog + schema named") != std::string::npos;
 }
 
-AdbcStatusCode RunDuckDbQueryAllowNotFound(ConnectionState* state,
-                                           std::string const& sql,
-                                           AdbcError* error) {
+AdbcStatusCode RunDuckDbQueryAllowNotFound(
+    ConnectionState* state, std::string const& sql, AdbcError* error,
+    IngestConflict ingest_conflict = IngestConflict::None) {
   duckdb_result result;
   duckdb_state const query_state =
       duckdb_query(state->connection, sql.c_str(), &result);
@@ -704,16 +727,18 @@ AdbcStatusCode RunDuckDbQueryAllowNotFound(ConnectionState* state,
     if (IsNotFoundDuckDbError(result_error_type, message)) {
       return NotFound(error, std::move(message), error_type);
     }
-    return IoError(error, std::move(message), error_type);
+    return DuckDbQueryError(error, result_error_type, std::move(message),
+                            ingest_conflict);
   }
   duckdb_destroy_result(&result);
   return Ok(error);
 }
 
-AdbcStatusCode RunRemoteQuery(ConnectionState* state, std::string const& sql,
-                              AdbcError* error) {
+AdbcStatusCode RunRemoteQuery(
+    ConnectionState* state, std::string const& sql, AdbcError* error,
+    IngestConflict ingest_conflict = IngestConflict::None) {
   return RunDuckDbQuery(state, adbc_driver_quack::BuildRemoteQuerySql(sql),
-                        error);
+                        error, ingest_conflict);
 }
 
 AdbcStatusCode RunRemoteQueryAllowNotFound(ConnectionState* state,
@@ -842,9 +867,9 @@ AdbcStatusCode ExecuteBulkIngest(StatementState* state, int64_t* rows_affected,
   std::string const create_columns =
       " (" + JoinColumnDefinitions(column_definitions) + ")";
   if (state->ingest_mode == ADBC_INGEST_OPTION_MODE_CREATE) {
-    status =
-        RunRemoteQuery(state->connection,
-                       "CREATE TABLE " + server_target + create_columns, error);
+    status = RunRemoteQuery(state->connection,
+                            "CREATE TABLE " + server_target + create_columns,
+                            error, IngestConflict::Create);
     if (status == ADBC_STATUS_OK) {
       status = RunDuckDbQuery(state->connection,
                               "SELECT * FROM quack_clear_cache()", error);
@@ -860,7 +885,8 @@ AdbcStatusCode ExecuteBulkIngest(StatementState* state, int64_t* rows_affected,
     if (status == ADBC_STATUS_OK) {
       status = RunDuckDbQueryAllowNotFound(
           state->connection,
-          "INSERT INTO " + target + " SELECT * FROM " + quoted_data, error);
+          "INSERT INTO " + target + " SELECT * FROM " + quoted_data, error,
+          IngestConflict::Append);
     }
   } else if (state->ingest_mode == ADBC_INGEST_OPTION_MODE_REPLACE) {
     status = RunRemoteQuery(state->connection,
@@ -890,7 +916,8 @@ AdbcStatusCode ExecuteBulkIngest(StatementState* state, int64_t* rows_affected,
     if (status == ADBC_STATUS_OK) {
       status = RunDuckDbQuery(
           state->connection,
-          "INSERT INTO " + target + " SELECT * FROM " + quoted_data, error);
+          "INSERT INTO " + target + " SELECT * FROM " + quoted_data, error,
+          IngestConflict::Append);
     }
   } else {
     status = InvalidArgument(error, "unsupported bulk ingest mode");
