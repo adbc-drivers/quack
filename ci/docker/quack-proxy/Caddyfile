@@ -1,4 +1,3 @@
-#!/usr/bin/env bash
 # Copyright (c) 2026 ADBC Drivers Contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,5 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+{
+	auto_https disable_redirects
+	skip_install_trust
+}
 
-set -euo pipefail
+http://:9494 {
+	respond /health "ready" 200
+	reverse_proxy quack-server:9494
+}
+
+https://localhost:9496, https://127.0.0.1:9496 {
+	tls internal
+	respond /health "ready" 200
+	reverse_proxy quack-server:9494
+}

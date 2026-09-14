@@ -145,26 +145,6 @@ jobs:
 
           ./ci/scripts/test.sh ${{ matrix.platform }} ${{ matrix.arch }}
 
-      - name: Post-Test
-        if: always()
-        working-directory: .
-        run: |
-          set -a
-          if [[ -f .env ]]; then
-            source .env
-          fi
-          if [[ -f .env.${{ matrix.platform }} ]]; then
-            source .env.${{ matrix.platform }}
-          fi
-          if [[ -f .env.ci ]]; then
-            source .env.ci
-          fi
-          if [[ -f .env.override ]]; then
-            source .env.override
-          fi
-          set +a
-
-          ./ci/scripts/post-test.sh
 
 
   validate:
@@ -279,26 +259,6 @@ jobs:
 
           cp validation-report.xml validation-report-${{ matrix.vendor_version }}.xml
 
-      - name: Post-Test
-        if: always()
-        working-directory: .
-        run: |
-          set -a
-          if [[ -f .env ]]; then
-            source .env
-          fi
-          if [[ -f .env.${{ matrix.platform }} ]]; then
-            source .env.${{ matrix.platform }}
-          fi
-          if [[ -f .env.ci ]]; then
-            source .env.ci
-          fi
-          if [[ -f .env.override ]]; then
-            source .env.override
-          fi
-          set +a
-
-          ./ci/scripts/post-test.sh
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:

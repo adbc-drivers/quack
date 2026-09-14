@@ -37,14 +37,21 @@ dbc install --pre quack
 
 ## Connecting
 
+Connections require verified TLS by default. Start the local development
+fixture with `docker compose up -d --wait test-service`. It includes a Caddy
+TLS proxy with a locally issued certificate, so the example skips verification:
+
 ```python
 from adbc_driver_manager import dbapi
 
 dbapi.connect(
     driver="quack",
-    db_kwargs={"uri": "quack://localhost:9494/?token=quack-secret"},
+    db_kwargs={"uri": "quack://localhost:9496/?token=quack-secret&tls=skip_verify"},
 )
 ```
+
+The plaintext endpoint is also available at
+`quack://localhost:9494/?token=quack-secret&tls=false`.
 
 ## Connection String Format
 
@@ -60,6 +67,14 @@ Components:
 - `HOST`: Quack server host (required)
 - `PORT`: Quack server port (optional)
 - `token`: shared Quack authentication token (optional)
+- `tls`: `true` (default) verifies the server certificate and hostname;
+  `false` uses plaintext HTTP; `skip_verify` or `skip-verify` requires TLS
+  without certificate or hostname verification.
+
+The database option `quack.tls` accepts the same values and overrides the URI
+setting regardless of setter order. Changes apply to subsequently initialized
+connections only. Empty, null, unknown, and duplicate URI `tls` values are
+rejected.
 
 ## Feature & Type Support
 

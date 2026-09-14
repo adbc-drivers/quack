@@ -53,7 +53,7 @@ root with CMake. There is no `rust/` or `go/` implementation directory.
 `AdbcDatabaseSetOption` accepts a `uri` option in this form:
 
 ```text
-quack://HOST[:PORT]/?token=TOKEN
+quack://HOST[:PORT]/?token=TOKEN[&tls=true|false|skip_verify|skip-verify]
 ```
 
 `AdbcConnectionInit` opens an in-memory local DuckDB database, attaches the
@@ -61,13 +61,30 @@ remote endpoint as the fixed catalog name `remote`, and stores the live DuckDB
 connection in `ConnectionState`. DuckDB bundles Quack, so the driver does
 not install, build, or explicitly load the extension.
 
+TLS is verified by default, including localhost. The `quack.tls` database
+option overrides the URI `tls` parameter regardless of setter order. `false`
+selects plaintext; `skip_verify` and `skip-verify` require TLS without certificate
+or hostname verification. Database option changes affect future connections
+only. Invalid values and duplicate `tls` parameters are rejected; repeated
+`token` parameters retain the first value.
+
+`src/quack_transport.cc` initializes the transport on the connection's private
+DuckDB instance. It loads the bundled httpfs extension, explicitly configures
+both CURL and httplib certificate verification settings, and always supplies
+`disable_ssl` to `ATTACH` so DuckDB's localhost plaintext default cannot apply.
+Transport failures close the local connection and database through the normal
+connection initialization cleanup.
+
 Validation defaults to a Quack server at:
 
 ```text
-quack://localhost:9494/?token=quack-secret
+quack://localhost:9496/?token=quack-secret&tls=skip_verify
 ```
 
-`compose.yaml` defines a local DuckDB Quack service for that endpoint.
+`compose.yaml` defines a single fixture with the DuckDB Quack service and a
+Caddy TLS proxy. The proxy issues a local certificate, so validation requires
+TLS while skipping certificate verification. The plaintext proxy endpoint
+remains available at `quack://localhost:9494/?token=quack-secret&tls=false`.
 
 Statement execution wraps caller SQL with Quack remote execution through
 `BuildRemoteQuerySql`. Bulk ingest scans an Arrow stream into local DuckDB,

@@ -34,6 +34,32 @@ dbc install quack --pre
 
 See [Building](#building) if you would rather build the drivers yourself.
 
+## Connecting
+
+Set the ADBC database option `uri` to
+`quack://HOST[:PORT]/?token=TOKEN`. Connections require TLS and verify the
+server certificate by default, including connections to localhost.
+
+The database option `quack.tls` or the URI query parameter `tls` selects the
+transport:
+
+| Value | Behavior |
+| --- | --- |
+| `true` (default) | Require TLS and verify the server certificate and hostname. |
+| `false` | Use plaintext HTTP. |
+| `skip_verify` or `skip-verify` | Require TLS without verifying the server certificate or hostname. |
+
+For the local development server, start `docker compose up -d --wait test-service`
+and use `quack://localhost:9496/?token=quack-secret&tls=skip_verify`.
+The Compose fixture includes a Caddy TLS proxy with a locally issued certificate.
+The plaintext endpoint is also available at
+`quack://localhost:9494/?token=quack-secret&tls=false`.
+
+An explicit `quack.tls` database option overrides the URI setting regardless
+of the order in which options are set. Changes affect subsequently initialized
+connections; existing connections retain their transport settings. Empty,
+null, unknown, and duplicate URI `tls` values are rejected.
+
 ## Building
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).

@@ -31,7 +31,7 @@ add_executable(adbc_driver_quack_helper_tests
 target_link_libraries(adbc_driver_quack_helper_tests
                       PRIVATE adbc_driver_quack_helpers GTest::gtest_main)
 
-gtest_discover_tests(adbc_driver_quack_helper_tests)
+gtest_discover_tests(adbc_driver_quack_helper_tests DISCOVERY_TIMEOUT 60)
 
 add_executable(adbc_driver_quack_driver_tests adbc_driver_test.cc
                                               exported_symbols_test.cc)
@@ -53,4 +53,4 @@ if(WIN32)
       $<TARGET_FILE_DIR:adbc_driver_quack_driver_tests>)
 endif()
 
-gtest_discover_tests(adbc_driver_quack_driver_tests)
+gtest_discover_tests(adbc_driver_quack_driver_tests DISCOVERY_TIMEOUT 60)

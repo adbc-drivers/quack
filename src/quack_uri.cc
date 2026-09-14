@@ -39,6 +39,19 @@ ParsedQuackUri Error(std::string message) {
 
 }  // namespace
 
+std::optional<QuackTlsMode> ParseQuackTlsMode(std::string_view value) {
+  if (value == "true") {
+    return QuackTlsMode::Verify;
+  }
+  if (value == "false") {
+    return QuackTlsMode::Disable;
+  }
+  if (value == "skip_verify" || value == "skip-verify") {
+    return QuackTlsMode::SkipVerify;
+  }
+  return std::nullopt;
+}
+
 ParsedQuackUri ParseQuackUri(std::string_view uri_text) {
   std::string uri_storage(uri_text);
   UriUriA uri;
@@ -79,11 +92,28 @@ ParsedQuackUri ParseQuackUri(std::string_view uri_text) {
       return Error("failed to parse quack URI query");
     }
 
+    bool token_seen = false;
+    bool tls_seen = false;
     for (UriQueryListA const* item = query; item != nullptr;
          item = item->next) {
-      if (item->key != nullptr && std::string_view(item->key) == "token") {
+      if (item->key == nullptr) {
+        continue;
+      }
+      std::string_view const key(item->key);
+      if (key == "token" && !token_seen) {
         result.token = item->value != nullptr ? item->value : "";
-        break;
+        token_seen = true;
+      } else if (key == "tls") {
+        auto const tls =
+            ParseQuackTlsMode(item->value != nullptr ? item->value : "");
+        if (tls_seen || !tls.has_value()) {
+          uriFreeQueryListA(query);
+          cleanup();
+          return Error(tls_seen ? "duplicate quack URI tls parameter"
+                                : "invalid quack URI tls parameter");
+        }
+        result.tls = *tls;
+        tls_seen = true;
       }
     }
     uriFreeQueryListA(query);

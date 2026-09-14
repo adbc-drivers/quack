@@ -265,3 +265,49 @@ TEST_F(AdbcDriverLiveTest, DatabaseInitHandlesManagerExtendedError) {
   EXPECT_EQ(database.private_driver, &driver);
   ASSERT_EQ(driver.release(&driver, nullptr), ADBC_STATUS_OK);
 }
+
+TEST(AdbcDriverTest, DatabaseTlsOptionAcceptsModesBeforeAndAfterInit) {
+  AdbcDatabase database = {};
+  AdbcError error = ADBC_ERROR_INIT;
+  ASSERT_EQ(AdbcDatabaseNew(&database, &error), ADBC_STATUS_OK);
+  for (char const* value : {"true", "false", "skip_verify", "skip-verify"}) {
+    EXPECT_EQ(AdbcDatabaseSetOption(&database, "quack.tls", value, &error),
+              ADBC_STATUS_OK);
+  }
+  ASSERT_EQ(
+      AdbcDatabaseSetOption(&database, "uri", "quack://localhost/", &error),
+      ADBC_STATUS_OK);
+  ASSERT_EQ(AdbcDatabaseInit(&database, &error), ADBC_STATUS_OK);
+  for (char const* value : {"true", "false", "skip_verify", "skip-verify"}) {
+    EXPECT_EQ(AdbcDatabaseSetOption(&database, "quack.tls", value, &error),
+              ADBC_STATUS_OK);
+  }
+  EXPECT_EQ(AdbcDatabaseRelease(&database, &error), ADBC_STATUS_OK);
+}
+
+TEST(AdbcDriverTest, DatabaseTlsOptionRejectsInvalidValues) {
+  AdbcDatabase database = {};
+  AdbcError error = ADBC_ERROR_INIT;
+  ASSERT_EQ(AdbcDatabaseNew(&database, &error), ADBC_STATUS_OK);
+  char const* const values[] = {nullptr, "", "TRUE", "invalid-secret-value"};
+  for (char const* value : values) {
+    EXPECT_EQ(AdbcDatabaseSetOption(&database, "quack.tls", value, &error),
+              ADBC_STATUS_INVALID_ARGUMENT);
+    ASSERT_NE(error.message, nullptr);
+    EXPECT_EQ(std::string(error.message).find("invalid-secret-value"),
+              std::string::npos);
+    if (error.release != nullptr) {
+      error.release(&error);
+    }
+  }
+  EXPECT_EQ(AdbcDatabaseSetOption(&database, "uri",
+                                  "quack://localhost/?token=secret&tls=invalid",
+                                  &error),
+            ADBC_STATUS_INVALID_ARGUMENT);
+  ASSERT_NE(error.message, nullptr);
+  EXPECT_EQ(std::string(error.message).find("secret"), std::string::npos);
+  if (error.release != nullptr) {
+    error.release(&error);
+  }
+  EXPECT_EQ(AdbcDatabaseRelease(&database, &error), ADBC_STATUS_OK);
+}

@@ -96,8 +96,16 @@ Codex must run `gh` and `pre-commit` outside the sandbox.
 - Assertions in C++ tests use Googletest.
 - Validation features are declared in `validation/tests/quack.py`.
 - Validation defaults to `QUACK_URI` or
-  `quack://localhost:9494/?token=quack-secret`.
-- `compose.yaml` defines the local Quack server used by validation.
+  `quack://localhost:9496/?token=quack-secret&tls=skip_verify`.
+- Connections require verified TLS by default. Use the database option
+  `quack.tls` or URI parameter `tls` to select `true`, `false`, or
+  `skip_verify` (`skip-verify` is also accepted). The database option takes
+  precedence over the URI; changes apply only to future connections.
+- `compose.yaml` defines the local Quack server and Caddy TLS proxy used by
+  validation. Start the single fixture with
+  `docker compose up -d --wait test-service`. The local TLS certificate is
+  untrusted; the plaintext endpoint is also available at
+  `quack://localhost:9494/?token=quack-secret&tls=false`.
 - Validation query overrides use txtcase files under `validation/queries/`.
 - Do not modify files under `.pixi/`; inspect them only when needed to
   understand installed validation dependencies.
