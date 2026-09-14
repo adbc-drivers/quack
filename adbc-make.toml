@@ -12,15 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#:schema https://raw.githubusercontent.com/adbc-drivers/dev/refs/heads/main/schema/generate-schema.json
-
 driver = "quack"
-private = false
+manylinux = "manylinux_2_28"
 
-[lang.script]
-subdir = "."
+[lang]
+lang = "script"
+toolchain = "cpp"
 
-[lang.script.validation]
-configs = [
-  { service_name = "test-service", vendor_version = "1.5" },
-]
+[additional-runtime-dependencies]
+linux = ["libstdc++.so.6"]
+macos = ["/usr/lib/libc++.1.dylib"]

@@ -71,7 +71,8 @@ pixi run validate -k get_objects
 pixi run validate
 ```
 
-There is no repository-local `pixi run make` task in `pixi.toml`.
+`pixi run make` builds the driver through `adbc-make.toml` and the CI build
+script. Use `pixi run make DEBUG=true` for a debug build with C++ tests.
 
 Always rebuild the driver before running validation:
 

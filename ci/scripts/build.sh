@@ -131,7 +131,7 @@ configure_args=(
   -DCMAKE_FIND_PACKAGE_PREFER_CONFIG=ON
 )
 
-build_args=(--build "$build_dir" --config "$cmake_config" --parallel)
+build_args=(--build "$build_dir" --config "$cmake_config")
 
 case "${CMAKE_VERBOSE:-}" in
   1 | ON | TRUE | true | yes | YES)
