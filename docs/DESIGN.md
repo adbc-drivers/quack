@@ -130,8 +130,9 @@ pixi run validate -k get_objects
 pixi run validate
 ```
 
-`pixi.toml` defines `validate`, `gendocs`, and `release`; it does not define a
-repository-local `pixi run make` task.
+`pixi.toml` defines `make`, `validate`, `gendocs`, and `release`. The `make`
+task uses `adbc-make.toml` to invoke the CI build script. Use
+`pixi run make DEBUG=true` for a debug build with C++ tests.
 
 Run `./ci/scripts/build.sh test linux amd64` before validation so the copied
 driver library is current.
