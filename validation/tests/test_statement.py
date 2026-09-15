@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import adbc_drivers_validation.tests.statement as statement_tests
-import pytest
 
 from .quack import get_quirks
 
@@ -24,6 +23,4 @@ def pytest_generate_tests(metafunc) -> None:
 
 
 class TestStatement(statement_tests.TestStatement):
-    @pytest.mark.skip(reason="execute_schema not supported")
-    def test_execute_schema_noalias(self, driver, conn, sample_table: str) -> None:
-        super().test_execute_schema_noalias(driver, conn, sample_table)
+    pass
