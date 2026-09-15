@@ -49,3 +49,55 @@ TEST(QuackUriTest, RejectsMissingHost) {
   EXPECT_FALSE(parsed.ok);
   EXPECT_NE(parsed.error.find("host"), std::string::npos);
 }
+
+TEST(QuackUriTest, DefaultsToVerifiedTls) {
+  auto const parsed = adbc_driver_quack::ParseQuackUri("quack://localhost/");
+  ASSERT_TRUE(parsed.ok) << parsed.error;
+  EXPECT_EQ(parsed.tls, adbc_driver_quack::QuackTlsMode::Verify);
+}
+
+TEST(QuackUriTest, ParsesTlsModesAndTokenInEitherOrder) {
+  using adbc_driver_quack::QuackTlsMode;
+  struct Case {
+    char const* value;
+    QuackTlsMode mode;
+  };
+  for (auto const& test : {Case{"true", QuackTlsMode::Verify},
+                           Case{"false", QuackTlsMode::Disable},
+                           Case{"skip_verify", QuackTlsMode::SkipVerify},
+                           Case{"skip-verify", QuackTlsMode::SkipVerify}}) {
+    for (bool const token_first : {false, true}) {
+      std::string const query =
+          token_first ? "token=a%20b%27c&tls=" + std::string(test.value)
+                      : "tls=" + std::string(test.value) + "&token=a%20b%27c";
+      auto const parsed =
+          adbc_driver_quack::ParseQuackUri("quack://db/?" + query);
+      ASSERT_TRUE(parsed.ok) << parsed.error;
+      EXPECT_EQ(parsed.tls, test.mode);
+      EXPECT_EQ(parsed.token, "a b'c");
+      EXPECT_EQ(parsed.endpoint, "quack:db");
+    }
+  }
+}
+
+TEST(QuackUriTest, RejectsInvalidAndDuplicateTlsParameters) {
+  for (char const* query :
+       {"tls", "tls=", "tls=TRUE", "tls=invalid", "tls=false&tls=false",
+        "tls=true&tls=false", "token=secret&tls=invalid"}) {
+    auto const parsed =
+        adbc_driver_quack::ParseQuackUri("quack://db/?" + std::string(query));
+    EXPECT_FALSE(parsed.ok) << query;
+    EXPECT_NE(parsed.error.find("tls"), std::string::npos);
+    EXPECT_EQ(parsed.error.find("secret"), std::string::npos);
+  }
+}
+
+TEST(QuackUriTest, PreservesFirstTokenIncludingEmptyTokens) {
+  for (char const* first : {"token", "token=", "token=first"}) {
+    auto const parsed = adbc_driver_quack::ParseQuackUri(
+        "quack://db/?" + std::string(first) + "&tls=false&token=second");
+    ASSERT_TRUE(parsed.ok) << parsed.error;
+    EXPECT_EQ(parsed.token, std::string(first) == "token=first" ? "first" : "");
+    EXPECT_EQ(parsed.tls, adbc_driver_quack::QuackTlsMode::Disable);
+  }
+}

@@ -27,6 +27,7 @@
 #include <cstring>
 #include <memory>
 #include <new>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -34,6 +35,7 @@
 
 #include "duckdb_arrow_stream.h"
 #include "get_info_stream.h"
+#include "quack_transport.h"
 #include "quack_uri.h"
 #include "sql_escape.h"
 
@@ -94,6 +96,7 @@ namespace {
 struct DatabaseState {
   std::string uri;
   adbc_driver_quack::ParsedQuackUri parsed_uri;
+  std::optional<adbc_driver_quack::QuackTlsMode> tls;
   bool initialized = false;
 };
 
@@ -1102,6 +1105,14 @@ AdbcStatusCode DriverDatabaseSetOption(AdbcDatabase* database, char const* key,
     return InvalidArgument(error,
                            "database option key and value must not be null");
   }
+  if (std::strcmp(key, "quack.tls") == 0) {
+    auto const tls = adbc_driver_quack::ParseQuackTlsMode(value);
+    if (!tls.has_value()) {
+      return InvalidArgument(error, "invalid database option 'quack.tls'");
+    }
+    state->tls = *tls;
+    return Ok(error);
+  }
   if (std::strcmp(key, "uri") != 0) {
     return NotImplemented(error, "unsupported database option");
   }
@@ -1165,20 +1176,13 @@ AdbcStatusCode DriverConnectionInit(AdbcConnection* connection,
     return IoError(error, "failed to connect local DuckDB client");
   }
 
-  std::string attach = "ATTACH " +
-                       adbc_driver_quack::DuckDbSqlStringLiteral(
-                           database_state->parsed_uri.endpoint) +
-                       " AS remote (disable_ssl true";
-  if (!database_state->parsed_uri.token.empty()) {
-    attach += ", token ";
-    attach += adbc_driver_quack::DuckDbSqlStringLiteral(
-        database_state->parsed_uri.token);
-  }
-  attach += ")";
-  AdbcStatusCode status = RunDuckDbQuery(connection_state, attach, error);
-  if (status != ADBC_STATUS_OK) {
+  auto const status = adbc_driver_quack::InitializeQuackTransport(
+      connection_state->connection, database_state->parsed_uri,
+      database_state->tls.value_or(database_state->parsed_uri.tls));
+  if (status.status != ADBC_STATUS_OK) {
     CloseConnectionState(connection_state);
-    return status;
+    return StatusError(error, status.status, status.message,
+                       status.vendor_code);
   }
 
   connection_state->initialized = true;

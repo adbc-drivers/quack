@@ -55,16 +55,22 @@ C++ unit tests can be run after building:
 
 Also, the validation suite can be run via [pixi](https://pixi.prefix.dev/latest/).
 The driver must be built with `./ci/scripts/build.sh` before running validation.
-Also, the Quack server defined in `compose.yaml` must be started:
+Start the Quack server and its Caddy TLS proxy from the single Compose fixture:
 
 ```bash
-docker compose up test-service
-export QUACK_URI="quack://localhost:9494/?token=quack-secret"
+docker compose up -d --wait test-service
+export QUACK_URI="quack://localhost:9496/?token=quack-secret&tls=skip_verify"
+export QUACK_HTTP_URI="quack://localhost:9494/?token=quack-secret&tls=false"
 
 pixi run validate --collect-only
 pixi run validate -k connection
 pixi run validate
 ```
+
+The fixture uses a locally issued certificate, so this URI skips verification
+while requiring TLS. The production driver default remains verified TLS.
+For plaintext testing, use
+`quack://localhost:9494/?token=quack-secret&tls=false`.
 
 This will produce a test report, which can be rendered into a documentation
 page (using MyST Markdown):

@@ -13,8 +13,9 @@
 # the License.
 
 add_library(
-  adbc_driver_quack_helpers STATIC duckdb_arrow_stream.cc get_info_stream.cc
-                                   quack_uri.cc sql_escape.cc)
+  adbc_driver_quack_helpers STATIC
+  duckdb_arrow_stream.cc get_info_stream.cc quack_transport.cc quack_uri.cc
+  sql_escape.cc)
 
 set(ADBC_DRIVER_QUACK_DUCKDB_LIBRARIES)
 if(TARGET duckdb_generated_extension_loader)

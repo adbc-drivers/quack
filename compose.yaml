@@ -20,8 +20,6 @@ services:
       - /data/quack-validation.duckdb
       - -init
       - /init/init.sql
-    ports:
-      - "9494:9494"
     stdin_open: true
     tty: true
     volumes:
@@ -29,23 +27,25 @@ services:
       - ./ci/docker/quack-server:/init:ro
 
   test-service:
-    image: curlimages/curl:8.16.0
-    entrypoint:
-      - /bin/sh
-      - -c
-    command:
-      - sleep infinity
+    image: caddy:2.10.2-alpine
+    ports:
+      - "9494:9494"
+      - "9496:9496"
+    volumes:
+      - ./ci/docker/quack-proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+    tmpfs:
+      - /data
+      - /config
     depends_on:
       quack-server:
         condition: service_started
     healthcheck:
       test:
-        - CMD
-        - curl
-        - -sS
-        - -o
-        - /dev/null
-        - http://quack-server:9494/quack
+        - CMD-SHELL
+        - >-
+          nc -z -w 2 quack-server 9494 &&
+          wget -q -O /dev/null http://127.0.0.1:9494/health &&
+          wget --no-check-certificate -q -O /dev/null https://127.0.0.1:9496/health
       interval: 2s
       timeout: 30s
       retries: 30

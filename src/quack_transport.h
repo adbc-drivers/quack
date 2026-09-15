@@ -14,24 +14,24 @@
 
 #pragma once
 
-#include <optional>
+#include <arrow-adbc/adbc.h>
+#include <duckdb.h>
+
+#include <cstdint>
 #include <string>
-#include <string_view>
+
+#include "quack_uri.h"
 
 namespace adbc_driver_quack {
 
-enum class QuackTlsMode { Verify, Disable, SkipVerify };
-
-std::optional<QuackTlsMode> ParseQuackTlsMode(std::string_view value);
-
-struct ParsedQuackUri {
-  bool ok = false;
-  std::string endpoint;
-  std::string token;
-  QuackTlsMode tls = QuackTlsMode::Verify;
-  std::string error;
+struct QuackTransportResult {
+  AdbcStatusCode status = ADBC_STATUS_OK;
+  std::string message;
+  int32_t vendor_code = 0;
 };
 
-ParsedQuackUri ParseQuackUri(std::string_view uri);
+QuackTransportResult InitializeQuackTransport(duckdb_connection connection,
+                                              ParsedQuackUri const& uri,
+                                              QuackTlsMode tls);
 
 }  // namespace adbc_driver_quack
