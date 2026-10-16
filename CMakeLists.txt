@@ -21,7 +21,7 @@ project(
   LANGUAGES C CXX)
 
 set(ADBC_DRIVER_QUACK_DUCKDB_VERSION
-    "1.5.5"
+    "1.5.6"
     CACHE STRING "DuckDB version used by the Quack driver")
 set(ADBC_DRIVER_QUACK_DUCKDB_TAG "v${ADBC_DRIVER_QUACK_DUCKDB_VERSION}")
 set(ADBC_DRIVER_QUACK_NANOARROW_VERSION
@@ -88,7 +88,9 @@ FetchContent_Declare(
     ${CMAKE_CURRENT_LIST_DIR}/cmake/patches/duckdb-disable-adbc.patch COMMAND
     ${CMAKE_COMMAND} -E chdir <SOURCE_DIR> git apply --ignore-whitespace
     ${CMAKE_CURRENT_LIST_DIR}/cmake/patches/duckdb-msvc-uncaught-exception.patch
-)
+    COMMAND ${CMAKE_COMMAND} -E chdir <SOURCE_DIR> git apply
+    --ignore-whitespace
+    ${CMAKE_CURRENT_LIST_DIR}/cmake/patches/duckdb-extension-patch-paths.patch)
 
 FetchContent_Declare(
   uriparser

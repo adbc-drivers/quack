@@ -14,7 +14,7 @@
 
 services:
   quack-server:
-    image: duckdb/duckdb:1.5.5
+    image: duckdb/duckdb:1.5.6
     command:
       - duckdb
       - /data/quack-validation.duckdb
