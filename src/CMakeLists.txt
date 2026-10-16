@@ -53,6 +53,9 @@ target_link_libraries(adbc_driver_quack PRIVATE adbc_driver_quack_helpers)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND EXISTS "/only-export-adbc.ld")
   target_link_options(adbc_driver_quack PRIVATE
                       "LINKER:--version-script,/only-export-adbc.ld")
+elseif(APPLE)
+  target_link_options(adbc_driver_quack PRIVATE
+                      "LINKER:-exported_symbol,_Adbc*")
 endif()
 
 target_include_directories(
