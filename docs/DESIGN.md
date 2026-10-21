@@ -162,12 +162,12 @@ Validation uses Pixi:
 
 ```bash
 pixi run validate --collect-only
-TZ=UTC pixi run validate -k get_objects
-TZ=UTC pixi run validate
+pixi run validate -k get_objects
+pixi run validate
 ```
 
-Use UTC for validation because the embedded DuckDB client uses the local
-timezone for Arrow timestamp metadata, and the validation cases expect UTC.
+The embedded DuckDB client explicitly uses UTC for its session timezone,
+including Arrow timestamp metadata, independently of `TZ` or the host timezone.
 
 `pixi.toml` defines `make`, `validate`, `gendocs`, and `release`. The `make`
 task uses `adbc-make.toml` to invoke the CI build script. Use
