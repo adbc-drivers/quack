@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import functools
-import re
 from pathlib import Path
 
 from adbc_drivers_validation import model, quirks
@@ -24,7 +23,7 @@ class QuackQuirks(model.DriverQuirks):
     driver = "adbc_driver_quack"
     driver_name = "ADBC Driver for DuckDB Quack"
     vendor_name = "DuckDB Quack"
-    vendor_version = re.compile(r"2\.0\.0-(?:alpha|dev)\d+\Z")
+    vendor_version = "2.0.0"
     short_version = "2.0"
     features = model.DriverFeatures(
         connection_get_table_schema=False,
@@ -72,10 +71,7 @@ class QuackQuirks(model.DriverQuirks):
 @functools.cache
 def get_quirks(version: str, *, vendor: str = "DuckDB Quack") -> QuackQuirks:
     quack_quirks = QuackQuirks()
-    if (
-        version != quack_quirks.short_version
-        and not quack_quirks.vendor_version.fullmatch(version)
-    ):
+    if version not in {quack_quirks.short_version, quack_quirks.vendor_version}:
         raise ValueError(f"Unsupported DuckDB Quack version: {version}")
     if vendor not in {quack_quirks.name, quack_quirks.vendor_name}:
         raise ValueError(f"Unsupported Quack vendor: {vendor}")

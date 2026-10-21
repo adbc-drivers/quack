@@ -18,9 +18,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
-ARG DUCKDB_VERSION=v2.0-cyanoptera
+ARG DUCKDB_VERSION=v2.0.0
 RUN curl --fail --silent --show-error --location \
-        "https://artifacts.duckdb.org/staged/${DUCKDB_VERSION}/duckdb-cli-linux-amd64.tar.gz" \
+        "https://github.com/duckdb/duckdb/releases/download/${DUCKDB_VERSION}/duckdb-cli-linux-amd64.tar.gz" \
         --output /tmp/duckdb.tar.gz \
     && tar -xzf /tmp/duckdb.tar.gz -C /usr/local/bin \
     && rm /tmp/duckdb.tar.gz

@@ -26,7 +26,7 @@ root with CMake. There is no `rust/` or `go/` implementation directory.
 
 - `CMakeLists.txt` is the root project. It requires CMake 4, uses C++20,
   finds ZLIB, OpenSSL, and CURL, fetches DuckDB, nanoarrow, and uriparser with
-  `FetchContent`, follows DuckDB's `v2.0-cyanoptera` branch with its Quack and
+  `FetchContent`, pins DuckDB's `v2.0.0` tag with its Quack and
   HTTPFS extension configurations, configures generated build metadata, and
   adds `src/` and `tests/`.
 - `src/CMakeLists.txt` builds `adbc_driver_quack_helpers` and the shared
@@ -102,16 +102,17 @@ before issuing another query on the
 same connection because DuckDB permits only one active streaming query result
 per connection.
 
-The validation server uses the staged `v2.0-cyanoptera` CLI, downloaded with
+The client builds against `v2.0.0`. The validation server uses the `v2.0.0`
+CLI from the GitHub release, downloaded with
 curl into an Ubuntu 24.04 image. The fixture runs as `linux/amd64` to match
 the downloaded artifact. Both client and server use Quack protocol version
 3; DuckDB 1.5.6 servers use the incompatible protocol version 1.
-Validation selects version `2.0` and accepts the preview's `2.0.0-alpha…`
-or `2.0.0-dev…` version string. `GetInfo` reports the remote server version.
+Validation selects version `2.0` and expects the server version `2.0.0`.
+`GetInfo` reports the remote server version. At the time of the tag update,
+the official `duckdb/duckdb:2.0.0` image was not published, so the fixture
+downloads the release CLI instead.
 
 Start the fixture with `docker compose up -d --build --wait test-service`.
-To refresh the moving preview artifact after the image has been cached, run
-`docker compose build --no-cache quack-server` before starting it again.
 
 ## Metadata APIs
 
@@ -142,7 +143,11 @@ It requires a vcpkg toolchain via `CMAKE_TOOLCHAIN_FILE`, `VCPKG_ROOT`, or
 `VCPKG_INSTALLATION_ROOT`.
 
 Existing CMake build trees must clear or override the cached
-`ADBC_DRIVER_QUACK_DUCKDB_VERSION` if it still selects `1.5.6`.
+`ADBC_DRIVER_QUACK_DUCKDB_VERSION` if it does not select `2.0.0`.
+
+MSVC Debug builds explicitly define `DEBUG`, which DuckDB uses to enable
+assertion-only helpers. MSVC's default `_DEBUG` alone leaves those helpers
+undefined while assertions still reference them.
 
 The C++ test wrapper is:
 

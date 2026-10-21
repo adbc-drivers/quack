@@ -21,9 +21,14 @@ project(
   LANGUAGES C CXX)
 
 set(ADBC_DRIVER_QUACK_DUCKDB_VERSION
-    "2.0-cyanoptera"
+    "2.0.0"
     CACHE STRING "DuckDB version used by the Quack driver")
 set(ADBC_DRIVER_QUACK_DUCKDB_TAG "v${ADBC_DRIVER_QUACK_DUCKDB_VERSION}")
+if(ADBC_DRIVER_QUACK_DUCKDB_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+  # DuckDB 2.0 otherwise labels source builds as development versions, even when
+  # the checkout is exactly at a release tag.
+  set(DUCKDB_EXPLICIT_VERSION "${ADBC_DRIVER_QUACK_DUCKDB_TAG}")
+endif()
 set(ADBC_DRIVER_QUACK_NANOARROW_VERSION
     "0.8.0"
     CACHE STRING "Apache Arrow nanoarrow version used by the Quack driver")
@@ -43,6 +48,9 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
 if(MSVC)
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  # DuckDB guards assertion-only helpers with DEBUG, while MSVC only defines
+  # _DEBUG. Keep those helpers enabled wherever Debug assertions are enabled.
+  add_compile_definitions($<$<CONFIG:Debug>:DEBUG>)
 endif()
 
 find_package(ZLIB REQUIRED GLOBAL)
