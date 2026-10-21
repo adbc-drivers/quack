@@ -44,12 +44,14 @@ class TestConnection(connection_tests.TestConnection):
         if not uri:
             pytest.skip("QUACK_HTTP_URI is required for the plaintext endpoint")
         options = {**db_kwargs, "uri": uri}
-        with adbc_driver_manager.dbapi.connect(
-            driver=driver_path, db_kwargs=options, autocommit=True
-        ) as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT 1")
-                assert cursor.fetchone() == (1,)
+        with (
+            adbc_driver_manager.dbapi.connect(
+                driver=driver_path, db_kwargs=options, autocommit=True
+            ) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute("SELECT 1")
+            assert cursor.fetchone() == (1,)
 
     @pytest.mark.parametrize("tls_source", ["uri", "database"])
     def test_tls_rejects_untrusted_certificate(
@@ -57,20 +59,24 @@ class TestConnection(connection_tests.TestConnection):
     ) -> None:
         options = {**db_kwargs, "uri": with_tls(db_kwargs["uri"], "skip_verify")}
         options.pop("quack.tls", None)
-        with adbc_driver_manager.dbapi.connect(
-            driver=driver_path, db_kwargs=options, autocommit=True
-        ) as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT 1")
-                assert cursor.fetchone() == (1,)
+        with (
+            adbc_driver_manager.dbapi.connect(
+                driver=driver_path, db_kwargs=options, autocommit=True
+            ) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute("SELECT 1")
+            assert cursor.fetchone() == (1,)
 
         if tls_source == "uri":
             options["uri"] = with_tls(options["uri"], "true")
         else:
             options["quack.tls"] = "true"
-        with pytest.raises(adbc_driver_manager.dbapi.OperationalError) as excinfo:
-            with adbc_driver_manager.dbapi.connect(
+        with (
+            pytest.raises(adbc_driver_manager.dbapi.OperationalError) as excinfo,
+            adbc_driver_manager.dbapi.connect(
                 driver=driver_path, db_kwargs=options, autocommit=True
-            ):
-                pass
+            ),
+        ):
+            pass
         assert excinfo.value.status_code == adbc_driver_manager.AdbcStatusCode.IO

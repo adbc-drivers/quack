@@ -21,7 +21,7 @@ project(
   LANGUAGES C CXX)
 
 set(ADBC_DRIVER_QUACK_DUCKDB_VERSION
-    "1.5.6"
+    "2.0-cyanoptera"
     CACHE STRING "DuckDB version used by the Quack driver")
 set(ADBC_DRIVER_QUACK_DUCKDB_TAG "v${ADBC_DRIVER_QUACK_DUCKDB_VERSION}")
 set(ADBC_DRIVER_QUACK_NANOARROW_VERSION
@@ -79,6 +79,8 @@ set(NANOARROW_INSTALL_SHARED
     OFF
     CACHE BOOL "" FORCE)
 
+# Exclude DuckDB's conflicting ADBC entry points but retain its nanoarrow
+# implementation, which is also used by the v2 C API.
 FetchContent_Declare(
   duckdb
   GIT_REPOSITORY https://github.com/duckdb/duckdb.git
@@ -88,9 +90,7 @@ FetchContent_Declare(
     ${CMAKE_CURRENT_LIST_DIR}/cmake/patches/duckdb-disable-adbc.patch COMMAND
     ${CMAKE_COMMAND} -E chdir <SOURCE_DIR> git apply --ignore-whitespace
     ${CMAKE_CURRENT_LIST_DIR}/cmake/patches/duckdb-msvc-uncaught-exception.patch
-    COMMAND ${CMAKE_COMMAND} -E chdir <SOURCE_DIR> git apply
-    --ignore-whitespace
-    ${CMAKE_CURRENT_LIST_DIR}/cmake/patches/duckdb-extension-patch-paths.patch)
+)
 
 FetchContent_Declare(
   uriparser
@@ -135,6 +135,9 @@ set(BUILD_BENCHMARKS
 set(BUILD_EXTENSIONS
     "quack;httpfs"
     CACHE STRING "" FORCE)
+set(LINK_CORE_EXTENSIONS
+    ON
+    CACHE BOOL "" FORCE)
 set(SKIP_EXTENSIONS
     parquet
     CACHE STRING "" FORCE)
@@ -146,6 +149,24 @@ set(CMAKE_PROJECT_HTTPFsExtension_INCLUDE
 FetchContent_MakeAvailable(duckdb nanoarrow uriparser)
 
 set(ADBC_DRIVER_QUACK_DUCKDB_INCLUDE_DIR "${duckdb_SOURCE_DIR}/src/include")
+
+# DuckDB's static archive does not register extensions. Generate a loader on
+# each final binary that embeds it, using the extensions and capabilities
+# selected by DuckDB's configuration.
+get_directory_property(
+  ADBC_DRIVER_QUACK_DUCKDB_CAPABILITIES
+  DIRECTORY "${duckdb_SOURCE_DIR}" DEFINITION
+            DUCKDB_STATICALLY_LINKED_CAPABILITIES)
+get_directory_property(
+  ADBC_DRIVER_QUACK_DUCKDB_EXTENSIONS
+  DIRECTORY "${duckdb_SOURCE_DIR}" DEFINITION
+            DUCKDB_STATICALLY_LINKED_EXTENSIONS)
+function(adbc_driver_quack_link_extensions target)
+  set(DUCKDB_MODULE_BASE_DIR "${duckdb_SOURCE_DIR}")
+  duckdb_link_extensions(
+    ${target} PRIVATE ${ADBC_DRIVER_QUACK_DUCKDB_CAPABILITIES}
+    ${ADBC_DRIVER_QUACK_DUCKDB_EXTENSIONS})
+endfunction()
 
 add_subdirectory(src)
 

@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 
 #include <cerrno>
+#include <string>
 
 struct ArrowArrayStreamGuard {
   ArrowArrayStream stream = {};
@@ -150,7 +151,126 @@ TEST_F(DuckDbArrowStreamTest, ReportsQueryErrors) {
 
   EXPECT_EQ(result.status, ADBC_STATUS_IO);
   EXPECT_FALSE(result.message.empty());
+  EXPECT_NE(result.vendor_code, 0);
   EXPECT_EQ(stream.stream.release, nullptr);
+}
+
+TEST_F(DuckDbArrowStreamTest, PreservesColumnNamesForEmptyResults) {
+  ArrowArrayStreamGuard stream;
+  auto const result = adbc_driver_quack::ExecuteDuckDbStreamingArrowQuery(
+      connection(), "SELECT 42 AS \"MiXeD Name\" WHERE false", stream.get(),
+      nullptr);
+  ASSERT_EQ(result.status, ADBC_STATUS_OK) << result.message;
+
+  ArrowSchemaGuard schema;
+  ASSERT_EQ(stream.stream.get_schema(stream.get(), schema.get()), 0);
+  ASSERT_EQ(schema.schema.n_children, 1);
+  EXPECT_STREQ(schema.schema.children[0]->name, "MiXeD Name");
+  EXPECT_STREQ(schema.schema.children[0]->format, "i");
+
+  for (int i = 0; i < 2; ++i) {
+    ArrowArrayGuard end;
+    EXPECT_EQ(stream.stream.get_next(stream.get(), end.get()), 0);
+    EXPECT_EQ(end.array.release, nullptr);
+    EXPECT_EQ(stream.stream.get_last_error(stream.get()), nullptr);
+  }
+}
+
+TEST_F(DuckDbArrowStreamTest, ReportsFetchErrors) {
+  ArrowArrayStreamGuard stream;
+  auto const result = adbc_driver_quack::ExecuteDuckDbStreamingArrowQuery(
+      connection(),
+      "SELECT CASE WHEN range = 9999 THEN error('stream failure') ELSE range "
+      "END "
+      "FROM range(10000)",
+      stream.get(), nullptr);
+  ASSERT_EQ(result.status, ADBC_STATUS_OK) << result.message;
+
+  int status = 0;
+  do {
+    ArrowArrayGuard array;
+    status = stream.stream.get_next(stream.get(), array.get());
+    ASSERT_TRUE(status != 0 || array.array.release != nullptr)
+        << "execution error was reported as end-of-stream";
+  } while (status == 0);
+  EXPECT_EQ(status, EIO);
+  ASSERT_NE(stream.stream.get_last_error(stream.get()), nullptr);
+  EXPECT_NE(std::string(stream.stream.get_last_error(stream.get()))
+                .find("stream failure"),
+            std::string::npos);
+
+  ArrowArrayGuard retry;
+  EXPECT_EQ(stream.stream.get_next(stream.get(), retry.get()), EIO);
+  EXPECT_EQ(retry.array.release, nullptr);
+}
+
+TEST_F(DuckDbArrowStreamTest, ReusesConnectionAfterEarlyRelease) {
+  ArrowArrayStreamGuard stream;
+  auto result = adbc_driver_quack::ExecuteDuckDbStreamingArrowQuery(
+      connection(), "SELECT range FROM range(1000000)", stream.get(), nullptr);
+  ASSERT_EQ(result.status, ADBC_STATUS_OK) << result.message;
+  {
+    ArrowArrayGuard array;
+    ASSERT_EQ(stream.stream.get_next(stream.get(), array.get()), 0);
+    ASSERT_NE(array.array.release, nullptr);
+    EXPECT_GT(array.array.length, 0);
+    EXPECT_LT(array.array.length, 1000000);
+  }
+  stream.Release();
+  EXPECT_EQ(stream.stream.private_data, nullptr);
+
+  result = adbc_driver_quack::ExecuteDuckDbStreamingArrowQuery(
+      connection(), "SELECT 42", stream.get(), nullptr);
+  ASSERT_EQ(result.status, ADBC_STATUS_OK) << result.message;
+  ArrowArrayGuard array;
+  ASSERT_EQ(stream.stream.get_next(stream.get(), array.get()), 0);
+  ASSERT_NE(array.array.release, nullptr);
+  ASSERT_EQ(array.array.n_children, 1);
+  ASSERT_NE(array.array.children[0]->buffers[1], nullptr);
+  EXPECT_EQ(static_cast<int32_t const*>(array.array.children[0]->buffers[1])[0],
+            42);
+  for (int i = 0; i < 2; ++i) {
+    ArrowArrayGuard end;
+    EXPECT_EQ(stream.stream.get_next(stream.get(), end.get()), 0);
+    EXPECT_EQ(end.array.release, nullptr);
+  }
+}
+
+TEST_F(DuckDbArrowStreamTest, ResolvesDeferredMetadata) {
+  ASSERT_EQ(duckdb_query(connection(),
+                         "CREATE TABLE deferred_metadata AS SELECT 1 AS value",
+                         nullptr),
+            DuckDBSuccess);
+
+  // A volatile default expands into multiple statements, so Submit cannot
+  // provide the output metadata until execution has advanced.
+  ArrowArrayStreamGuard stream;
+  auto result = adbc_driver_quack::ExecuteDuckDbStreamingArrowQuery(
+      connection(),
+      "ALTER TABLE deferred_metadata ADD COLUMN extra DOUBLE DEFAULT random()",
+      stream.get(), nullptr);
+  ASSERT_EQ(result.status, ADBC_STATUS_OK) << result.message;
+  ArrowSchemaGuard schema;
+  ASSERT_EQ(stream.stream.get_schema(stream.get(), schema.get()), 0);
+  ASSERT_NE(schema.schema.release, nullptr);
+  while (true) {
+    ArrowArrayGuard array;
+    ASSERT_EQ(stream.stream.get_next(stream.get(), array.get()), 0)
+        << stream.stream.get_last_error(stream.get());
+    if (array.array.release == nullptr) {
+      break;
+    }
+  }
+  stream.Release();
+
+  result = adbc_driver_quack::ExecuteDuckDbStreamingArrowQuery(
+      connection(), "SELECT extra FROM deferred_metadata", stream.get(),
+      nullptr);
+  ASSERT_EQ(result.status, ADBC_STATUS_OK) << result.message;
+  ArrowArrayGuard array;
+  ASSERT_EQ(stream.stream.get_next(stream.get(), array.get()), 0);
+  ASSERT_NE(array.array.release, nullptr);
+  EXPECT_EQ(array.array.length, 1);
 }
 
 TEST_F(DuckDbArrowStreamTest, RejectsInvalidCallbackArguments) {

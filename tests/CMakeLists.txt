@@ -30,6 +30,7 @@ add_executable(adbc_driver_quack_helper_tests
 
 target_link_libraries(adbc_driver_quack_helper_tests
                       PRIVATE adbc_driver_quack_helpers GTest::gtest_main)
+adbc_driver_quack_link_extensions(adbc_driver_quack_helper_tests)
 
 gtest_discover_tests(adbc_driver_quack_helper_tests DISCOVERY_TIMEOUT 60)
 

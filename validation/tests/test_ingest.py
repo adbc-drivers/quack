@@ -57,11 +57,13 @@ class TestIngest(ingest_tests.TestIngest):
         table_name = "test_bulk_ingest_manual_rollback"
         data = pyarrow.table({"idx": [1], "value": ["a"]})
 
-        with adbc_driver_manager.dbapi.connect(
-            driver=driver_path, db_kwargs=db_kwargs, autocommit=True
-        ) as cleanup_conn:
-            with cleanup_conn.cursor() as cursor:
-                driver.try_drop_table(cursor, table_name=table_name)
+        with (
+            adbc_driver_manager.dbapi.connect(
+                driver=driver_path, db_kwargs=db_kwargs, autocommit=True
+            ) as cleanup_conn,
+            cleanup_conn.cursor() as cursor,
+        ):
+            driver.try_drop_table(cursor, table_name=table_name)
 
         with adbc_driver_manager.dbapi.connect(
             driver=driver_path, db_kwargs=db_kwargs, autocommit=False
@@ -71,11 +73,13 @@ class TestIngest(ingest_tests.TestIngest):
 
             conn.rollback()
 
-            with conn.cursor() as cursor:
-                with pytest.raises(adbc_driver_manager.dbapi.Error) as excinfo:
-                    execute_query_without_prepare(
-                        cursor,
-                        f"SELECT * FROM {driver.quote_identifier(table_name)}",
-                    )
+            with (
+                conn.cursor() as cursor,
+                pytest.raises(adbc_driver_manager.dbapi.Error) as excinfo,
+            ):
+                execute_query_without_prepare(
+                    cursor,
+                    f"SELECT * FROM {driver.quote_identifier(table_name)}",
+                )
 
         assert driver.is_table_not_found(table_name, excinfo.value)

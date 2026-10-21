@@ -17,20 +17,6 @@ add_library(
   duckdb_arrow_stream.cc get_info_stream.cc quack_transport.cc quack_uri.cc
   sql_escape.cc)
 
-set(ADBC_DRIVER_QUACK_DUCKDB_LIBRARIES)
-if(TARGET duckdb_generated_extension_loader)
-  list(APPEND ADBC_DRIVER_QUACK_DUCKDB_LIBRARIES
-       "$<LINK_LIBRARY:WHOLE_ARCHIVE,duckdb_generated_extension_loader>")
-endif()
-foreach(extension_target
-        quack_extension json_extension autocomplete_extension httpfs_extension
-        core_functions_extension jemalloc_extension)
-  if(TARGET ${extension_target})
-    list(APPEND ADBC_DRIVER_QUACK_DUCKDB_LIBRARIES ${extension_target})
-  endif()
-endforeach()
-list(APPEND ADBC_DRIVER_QUACK_DUCKDB_LIBRARIES duckdb_static)
-
 target_include_directories(
   adbc_driver_quack_helpers
   PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
@@ -40,7 +26,7 @@ target_include_directories(
 
 target_link_libraries(
   adbc_driver_quack_helpers
-  PUBLIC ${ADBC_DRIVER_QUACK_DUCKDB_LIBRARIES} uriparser
+  PUBLIC duckdb_static uriparser
   PRIVATE nanoarrow_static)
 
 set_target_properties(
@@ -50,6 +36,7 @@ set_target_properties(
 add_library(adbc_driver_quack SHARED adbc_driver_quack.cc)
 
 target_link_libraries(adbc_driver_quack PRIVATE adbc_driver_quack_helpers)
+adbc_driver_quack_link_extensions(adbc_driver_quack)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND EXISTS "/only-export-adbc.ld")
   target_link_options(adbc_driver_quack PRIVATE
                       "LINKER:--version-script,/only-export-adbc.ld")
