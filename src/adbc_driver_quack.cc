@@ -35,6 +35,7 @@
 
 #include "duckdb_arrow_stream.h"
 #include "get_info_stream.h"
+#include "quack_logging.h"
 #include "quack_transport.h"
 #include "quack_uri.h"
 #include "sql_escape.h"
@@ -1175,6 +1176,9 @@ AdbcStatusCode DriverConnectionInit(AdbcConnection* connection,
     CloseConnectionState(connection_state);
     return IoError(error, "failed to connect local DuckDB client");
   }
+
+  adbc_driver_quack::InitializeQuackLogging(connection_state->database,
+                                            connection_state->connection);
 
   auto const status = adbc_driver_quack::InitializeQuackTransport(
       connection_state->connection, database_state->parsed_uri,

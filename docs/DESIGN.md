@@ -50,6 +50,17 @@ root with CMake. There is no `rust/` or `go/` implementation directory.
 - `validation/queries/` contains txtcase overrides for SQL dialect or result
   differences.
 
+## Client Logging
+
+`quack_logging.cc` reads `ADBC_DRIVER_QUACK_LOG_LEVEL` once after the local
+DuckDB connection opens, before transport setup and remote ATTACH. It
+registers a C API custom log storage owned by that local database, then calls
+`enable_logging` with a validated severity and no category filter. The
+callback serializes stderr writes across connections and flushes each record;
+it never propagates exceptions. No callback state outlives the database.
+Invalid configuration and setup failures warn without preventing connection
+initialization. Unset or empty configuration leaves logging disabled.
+
 ## Runtime Model
 
 `AdbcDatabaseSetOption` accepts a `uri` option in this form:
