@@ -67,6 +67,6 @@ repos:
     args: [--in-place]
 
 - repo: https://github.com/adbc-drivers/dev
-  rev: 50a208814d023facebce91d38212860a2d634ad3
+  rev: 9828b55d6941a1d8139350567dba053a6946465d
   hooks:
   - id: rat
