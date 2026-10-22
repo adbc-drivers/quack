@@ -148,6 +148,9 @@ Existing CMake build trees must clear or override the cached
 MSVC Debug builds explicitly define `DEBUG`, which DuckDB uses to enable
 assertion-only helpers. MSVC's default `_DEBUG` alone leaves those helpers
 undefined while assertions still reference them.
+The `duckdb-msvc-debug-symbols.patch` excludes DuckDB's LLDB-only template
+instantiations under MSVC: their exception specifications conflict with the
+MSVC standard library. Runtime assertions remain enabled.
 
 The C++ test wrapper is:
 

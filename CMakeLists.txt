@@ -98,7 +98,9 @@ FetchContent_Declare(
     ${CMAKE_CURRENT_LIST_DIR}/cmake/patches/duckdb-disable-adbc.patch COMMAND
     ${CMAKE_COMMAND} -E chdir <SOURCE_DIR> git apply --ignore-whitespace
     ${CMAKE_CURRENT_LIST_DIR}/cmake/patches/duckdb-msvc-uncaught-exception.patch
-)
+    COMMAND ${CMAKE_COMMAND} -E chdir <SOURCE_DIR> git apply
+    --ignore-whitespace
+    ${CMAKE_CURRENT_LIST_DIR}/cmake/patches/duckdb-msvc-debug-symbols.patch)
 
 FetchContent_Declare(
   uriparser
