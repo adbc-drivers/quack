@@ -17,6 +17,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import adbc_driver_manager.dbapi
 import adbc_drivers_validation.tests.connection as connection_tests
+import pyarrow
 import pytest
 
 from .quack import get_quirks
@@ -39,17 +40,32 @@ def with_tls(uri: str, tls: str) -> str:
 
 
 class TestConnection(connection_tests.TestConnection):
+    @pytest.mark.parametrize("timezone", ["Asia/Tokyo", "Etc/UTC"])
+    def test_timestamp_timezone_is_utc(self, conn_factory, monkeypatch, timezone):
+        monkeypatch.setenv("TZ", timezone)
+        with conn_factory() as connection, connection.cursor() as cursor:
+            cursor.execute("SELECT TIMESTAMPTZ '2000-01-01 09:00:00+09' AS value")
+            result = cursor.fetch_arrow_table()
+            assert result.schema.field("value").type == pyarrow.timestamp(
+                "us", tz="UTC"
+            )
+            assert result.column("value").cast(pyarrow.int64()).to_pylist() == [
+                946684800000000
+            ]
+
     def test_http_query(self, driver_path: str, db_kwargs: dict) -> None:
         uri = os.environ.get("QUACK_HTTP_URI")
         if not uri:
             pytest.skip("QUACK_HTTP_URI is required for the plaintext endpoint")
         options = {**db_kwargs, "uri": uri}
-        with adbc_driver_manager.dbapi.connect(
-            driver=driver_path, db_kwargs=options, autocommit=True
-        ) as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT 1")
-                assert cursor.fetchone() == (1,)
+        with (
+            adbc_driver_manager.dbapi.connect(
+                driver=driver_path, db_kwargs=options, autocommit=True
+            ) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute("SELECT 1")
+            assert cursor.fetchone() == (1,)
 
     @pytest.mark.parametrize("tls_source", ["uri", "database"])
     def test_tls_rejects_untrusted_certificate(
@@ -57,20 +73,24 @@ class TestConnection(connection_tests.TestConnection):
     ) -> None:
         options = {**db_kwargs, "uri": with_tls(db_kwargs["uri"], "skip_verify")}
         options.pop("quack.tls", None)
-        with adbc_driver_manager.dbapi.connect(
-            driver=driver_path, db_kwargs=options, autocommit=True
-        ) as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT 1")
-                assert cursor.fetchone() == (1,)
+        with (
+            adbc_driver_manager.dbapi.connect(
+                driver=driver_path, db_kwargs=options, autocommit=True
+            ) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute("SELECT 1")
+            assert cursor.fetchone() == (1,)
 
         if tls_source == "uri":
             options["uri"] = with_tls(options["uri"], "true")
         else:
             options["quack.tls"] = "true"
-        with pytest.raises(adbc_driver_manager.dbapi.OperationalError) as excinfo:
-            with adbc_driver_manager.dbapi.connect(
+        with (
+            pytest.raises(adbc_driver_manager.dbapi.OperationalError) as excinfo,
+            adbc_driver_manager.dbapi.connect(
                 driver=driver_path, db_kwargs=options, autocommit=True
-            ):
-                pass
+            ),
+        ):
+            pass
         assert excinfo.value.status_code == adbc_driver_manager.AdbcStatusCode.IO

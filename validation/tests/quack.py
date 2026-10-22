@@ -23,8 +23,8 @@ class QuackQuirks(model.DriverQuirks):
     driver = "adbc_driver_quack"
     driver_name = "ADBC Driver for DuckDB Quack"
     vendor_name = "DuckDB Quack"
-    vendor_version = "1.5.6"
-    short_version = "1.5"
+    vendor_version = "2.0.0"
+    short_version = "2.0"
     features = model.DriverFeatures(
         connection_get_table_schema=False,
         connection_set_current_catalog=True,
@@ -71,7 +71,7 @@ class QuackQuirks(model.DriverQuirks):
 @functools.cache
 def get_quirks(version: str, *, vendor: str = "DuckDB Quack") -> QuackQuirks:
     quack_quirks = QuackQuirks()
-    if version not in {quack_quirks.vendor_version, quack_quirks.short_version}:
+    if version not in {quack_quirks.short_version, quack_quirks.vendor_version}:
         raise ValueError(f"Unsupported DuckDB Quack version: {version}")
     if vendor not in {quack_quirks.name, quack_quirks.vendor_name}:
         raise ValueError(f"Unsupported Quack vendor: {vendor}")

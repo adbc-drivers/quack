@@ -26,11 +26,13 @@ root with CMake. There is no `rust/` or `go/` implementation directory.
 
 - `CMakeLists.txt` is the root project. It requires CMake 4, uses C++20,
   finds ZLIB, OpenSSL, and CURL, fetches DuckDB, nanoarrow, and uriparser with
-  `FetchContent`, builds DuckDB with its bundled Quack and HTTPFS extension
-  configurations, configures generated build metadata, and adds `src/` and
-  `tests/`.
+  `FetchContent`, pins DuckDB's `v2.0.0` tag with its Quack and
+  HTTPFS extension configurations, configures generated build metadata, and
+  adds `src/` and `tests/`.
 - `src/CMakeLists.txt` builds `adbc_driver_quack_helpers` and the shared
-  library `adbc_driver_quack`.
+  library `adbc_driver_quack`. DuckDB's `duckdb_link_extensions` helper adds
+  static extension registration directly to the shared driver and the
+  standalone helper-test executable.
 - `src/adbc_driver_quack.cc` owns the exported ADBC C API entry points, driver
   table initialization, database/connection/statement state, query execution,
   and bulk ingest.
@@ -91,11 +93,26 @@ Statement execution wraps caller SQL with Quack remote execution through
 creates or updates the remote table through Quack, clears Quack metadata cache,
 and inserts into `remote.<schema>.<table>`.
 
-Result-producing statement execution and GetObjects use DuckDB streaming query
-results and convert each fetched DuckDB chunk to Arrow on demand. Callers must
-consume or release a returned Arrow stream before issuing another query on the
+Result-producing statement execution and GetObjects use `Connection::Submit`
+and `QueryResultStream<ChunkFormat>`, converting each fetched DuckDB chunk to
+Arrow on demand. Deferred metadata is resolved before exposing the Arrow
+stream without materializing the result. Fetch errors are checked separately
+from end-of-stream. Callers must consume or release a returned Arrow stream
+before issuing another query on the
 same connection because DuckDB permits only one active streaming query result
 per connection.
+
+The client builds against `v2.0.0`. The validation server uses the `v2.0.0`
+CLI from the GitHub release, downloaded with
+curl into an Ubuntu 24.04 image. The fixture runs as `linux/amd64` to match
+the downloaded artifact. Both client and server use Quack protocol version
+3; DuckDB 1.5.6 servers use the incompatible protocol version 1.
+Validation selects version `2.0` and expects the server version `2.0.0`.
+`GetInfo` reports the remote server version. At the time of the tag update,
+the official `duckdb/duckdb:2.0.0` image was not published, so the fixture
+downloads the release CLI instead.
+
+Start the fixture with `docker compose up -d --build --wait test-service`.
 
 ## Metadata APIs
 
@@ -125,6 +142,16 @@ copies the shared library to `build/libadbc_driver_quack.so` for validation.
 It requires a vcpkg toolchain via `CMAKE_TOOLCHAIN_FILE`, `VCPKG_ROOT`, or
 `VCPKG_INSTALLATION_ROOT`.
 
+Existing CMake build trees must clear or override the cached
+`ADBC_DRIVER_QUACK_DUCKDB_VERSION` if it does not select `2.0.0`.
+
+MSVC Debug builds explicitly define `DEBUG`, which DuckDB uses to enable
+assertion-only helpers. MSVC's default `_DEBUG` alone leaves those helpers
+undefined while assertions still reference them.
+The `duckdb-msvc-debug-symbols.patch` excludes DuckDB's LLDB-only template
+instantiations under MSVC: their exception specifications conflict with the
+MSVC standard library. Runtime assertions remain enabled.
+
 The C++ test wrapper is:
 
 ```bash
@@ -146,6 +173,9 @@ pixi run validate --collect-only
 pixi run validate -k get_objects
 pixi run validate
 ```
+
+The embedded DuckDB client explicitly uses UTC for its session timezone,
+including Arrow timestamp metadata, independently of `TZ` or the host timezone.
 
 `pixi.toml` defines `make`, `validate`, `gendocs`, and `release`. The `make`
 task uses `adbc-make.toml` to invoke the CI build script. Use

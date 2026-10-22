@@ -39,7 +39,12 @@ QuackTransportResult Execute(duckdb_connection connection,
 QuackTransportResult InitializeQuackTransport(duckdb_connection connection,
                                               ParsedQuackUri const& uri,
                                               QuackTlsMode tls) {
-  auto status = Execute(connection, "LOAD httpfs");
+  // Arrow timestamp metadata must not depend on the host's timezone.
+  auto status = Execute(connection, "SET TimeZone = 'UTC'");
+  if (status.status != ADBC_STATUS_OK) {
+    return status;
+  }
+  status = Execute(connection, "LOAD httpfs");
   if (status.status != ADBC_STATUS_OK) {
     return status;
   }
