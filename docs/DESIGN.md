@@ -102,17 +102,14 @@ before issuing another query on the
 same connection because DuckDB permits only one active streaming query result
 per connection.
 
-The client builds against `v2.0.0`. The validation server uses the `v2.0.0`
-CLI from the GitHub release, downloaded with
-curl into an Ubuntu 24.04 image. The fixture runs as `linux/amd64` to match
-the downloaded artifact. Both client and server use Quack protocol version
-3; DuckDB 1.5.6 servers use the incompatible protocol version 1.
+The client builds against `v2.0.0`. The validation server uses the official
+`duckdb/duckdb:2.0.0` Docker image, which supports native AMD64 and ARM64
+execution. Both client and server use Quack protocol version 3; DuckDB 1.5.6
+servers use the incompatible protocol version 1.
 Validation selects version `2.0` and expects the server version `2.0.0`.
-`GetInfo` reports the remote server version. At the time of the tag update,
-the official `duckdb/duckdb:2.0.0` image was not published, so the fixture
-downloads the release CLI instead.
+`GetInfo` reports the remote server version.
 
-Start the fixture with `docker compose up -d --build --wait test-service`.
+Start the fixture with `docker compose up -d --wait test-service`.
 
 ## Metadata APIs
 

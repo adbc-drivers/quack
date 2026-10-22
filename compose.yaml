@@ -14,8 +14,7 @@
 
 services:
   quack-server:
-    platform: linux/amd64
-    build: ./ci/docker/quack-server
+    image: duckdb/duckdb:2.0.0
     command:
       - duckdb
       - /data/quack-validation.duckdb
