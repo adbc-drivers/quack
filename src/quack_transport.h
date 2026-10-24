@@ -18,6 +18,7 @@
 #include <duckdb.h>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 #include "quack_uri.h"
@@ -30,8 +31,8 @@ struct QuackTransportResult {
   int32_t vendor_code = 0;
 };
 
-QuackTransportResult InitializeQuackTransport(duckdb_connection connection,
-                                              ParsedQuackUri const& uri,
-                                              QuackTlsMode tls);
+QuackTransportResult InitializeQuackTransport(
+    duckdb_connection connection, ParsedQuackUri const& uri, QuackTlsMode tls,
+    std::optional<uint64_t> fetch_read_ahead = std::nullopt);
 
 }  // namespace adbc_driver_quack

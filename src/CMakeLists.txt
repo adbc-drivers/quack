@@ -14,8 +14,8 @@
 
 add_library(
   adbc_driver_quack_helpers STATIC
-  duckdb_arrow_stream.cc get_info_stream.cc quack_transport.cc quack_uri.cc
-  sql_escape.cc)
+  duckdb_arrow_stream.cc get_info_stream.cc quack_logging.cc quack_transport.cc
+  quack_uri.cc sql_escape.cc)
 
 target_include_directories(
   adbc_driver_quack_helpers

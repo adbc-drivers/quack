@@ -36,9 +36,9 @@ QuackTransportResult Execute(duckdb_connection connection,
 
 }  // namespace
 
-QuackTransportResult InitializeQuackTransport(duckdb_connection connection,
-                                              ParsedQuackUri const& uri,
-                                              QuackTlsMode tls) {
+QuackTransportResult InitializeQuackTransport(
+    duckdb_connection connection, ParsedQuackUri const& uri, QuackTlsMode tls,
+    std::optional<uint64_t> fetch_read_ahead) {
   // Arrow timestamp metadata must not depend on the host's timezone.
   auto status = Execute(connection, "SET TimeZone = 'UTC'");
   if (status.status != ADBC_STATUS_OK) {
@@ -47,6 +47,14 @@ QuackTransportResult InitializeQuackTransport(duckdb_connection connection,
   status = Execute(connection, "LOAD httpfs");
   if (status.status != ADBC_STATUS_OK) {
     return status;
+  }
+  if (fetch_read_ahead.has_value()) {
+    // This controls the client's fetch pipeline, not the remote server.
+    status = Execute(connection, "LOAD quack");
+    if (status.status != ADBC_STATUS_OK) return status;
+    status = Execute(connection, "SET quack_fetch_read_ahead = " +
+                                     std::to_string(*fetch_read_ahead));
+    if (status.status != ADBC_STATUS_OK) return status;
   }
   std::string const verify = tls == QuackTlsMode::SkipVerify ? "false" : "true";
   status = Execute(connection,

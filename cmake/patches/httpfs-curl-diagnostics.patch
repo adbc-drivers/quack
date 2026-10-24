@@ -1,0 +1,116 @@
+# Copyright (c) 2026 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+diff --git a/src/include/http/httpfs_curl_client.hpp b/src/include/http/httpfs_curl_client.hpp
+--- a/src/include/http/httpfs_curl_client.hpp
++++ b/src/include/http/httpfs_curl_client.hpp
+@@ -59,6 +59,13 @@
+ 	int GetExecuteErrno() const {
+ 		return execute_errno;
+ 	}
++	const char *GetErrorBuffer() const {
++		return error_buffer;
++	}
++	void ResetDiagnostics() {
++		error_buffer[0] = '\0';
++		execute_errno = 0;
++	}
+ 	template <class T>
+ 	void SetOption(CURLoption option, T value) {
+ 		auto result = curl_easy_setopt(curl, option, value);
+@@ -71,6 +78,7 @@
+ private:
+ 	CURL *curl = nullptr;
+ 	int execute_errno = 0;
++	char error_buffer[CURL_ERROR_SIZE] = {};
+ };
+ 
+ class CURLRequestHeaders {
+diff --git a/src/http/httpfs_curl_client.cpp b/src/http/httpfs_curl_client.cpp
+--- a/src/http/httpfs_curl_client.cpp
++++ b/src/http/httpfs_curl_client.cpp
+@@ -118,6 +118,7 @@
+ 	}
+ 	// Avoid changing signal handlers during concurrent requests.
+ 	SetOption(CURLOPT_NOSIGNAL, 1L);
++	SetOption(CURLOPT_ERRORBUFFER, error_buffer);
+ }
+ 
+ CURLHandle::CURLHandle(bool use_native_ca) : CURLHandle() {
+@@ -747,6 +748,7 @@
+ 		if (!curl) {
+ 			throw IOException("Curl client must be reinitialized after failed callback configuration");
+ 		}
++		curl->ResetDiagnostics();
+ 		// clear headers after transform
+ 		request_info->header_collection.clear();
+ 		// reset request info.
+@@ -758,21 +760,7 @@
+ 	unique_ptr<HTTPResponse> TransformResponseCurl(CURLcode res, bool include_body = true) {
+ 		auto status_code = HTTPUtil::ToStatusCode(request_info->response_code);
+ 		auto response = make_uniq<HTTPResponse>(status_code);
+-		if (res != CURLcode::CURLE_OK) {
+-			long os_errno = 0; // NOLINT(google-runtime-int): required by curl_easy_getinfo
+-			curl_easy_getinfo(*curl, CURLINFO_OS_ERRNO, &os_errno);
+-			if (os_errno == 0) {
+-				os_errno = curl->GetExecuteErrno();
+-			}
+-			response->request_error =
+-			    HTTPFSUtil::DescribeRequestError(curl_easy_strerror(res), static_cast<int>(os_errno));
+-			return response;
+-		}
+-		if (include_body) {
+-			response->body = request_info->body;
+-		}
+ 		response->url = request_info->url;
+-		response->reason = HTTPUtil::GetStatusMessage(status_code);
+ 		if (!request_info->header_collection.empty()) {
+ 			auto &response_headers = request_info->header_collection.back();
+ 			for (auto &header : response_headers) {
+@@ -785,7 +773,34 @@
+ 				}
+ 			}
+ 		}
+-		// ResetRequestInfo();
++		if (res != CURLcode::CURLE_OK) {
++			long os_errno = 0; // NOLINT(google-runtime-int): required by curl_easy_getinfo
++			curl_easy_getinfo(*curl, CURLINFO_OS_ERRNO, &os_errno);
++			if (os_errno == 0) {
++				os_errno = curl->GetExecuteErrno();
++			}
++			curl_off_t expected = -1;
++			curl_off_t received = -1;
++			string expected_bytes = "unknown";
++			string received_bytes = "unknown";
++			if (curl_easy_getinfo(*curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &expected) == CURLE_OK && expected >= 0) {
++				expected_bytes = std::to_string(expected);
++			}
++			if (curl_easy_getinfo(*curl, CURLINFO_SIZE_DOWNLOAD_T, &received) == CURLE_OK && received >= 0) {
++				received_bytes = std::to_string(received);
++			}
++			auto detail = curl->GetErrorBuffer();
++			auto message = StringUtil::Format(
++			    "%s (curl_code=%d, curl_detail=%s, os_errno=%lld, expected_body_bytes=%s, received_body_bytes=%s)",
++			    curl_easy_strerror(res), static_cast<int>(res), detail[0] ? detail : curl_easy_strerror(res),
++			    static_cast<int64_t>(os_errno), expected_bytes, received_bytes);
++			response->request_error = HTTPFSUtil::DescribeRequestError(message, static_cast<int>(os_errno));
++			return response;
++		}
++		response->reason = HTTPUtil::GetStatusMessage(status_code);
++		if (include_body) {
++			response->body = request_info->body;
++		}
+ 		return response;
+ 	}
+ 

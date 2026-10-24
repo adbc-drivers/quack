@@ -60,6 +60,28 @@ of the order in which options are set. Changes affect subsequently initialized
 connections; existing connections retain their transport settings. Empty,
 null, unknown, and duplicate URI `tls` values are rejected.
 
+## Client Logging
+
+Set `ADBC_DRIVER_QUACK_LOG_LEVEL` before opening a connection to send local
+DuckDB client logs to stderr. For example:
+
+```bash
+ADBC_DRIVER_QUACK_LOG_LEVEL=debug ./your-application
+```
+
+Levels are case-insensitive: `debug`, `info`, `warn` (or `warning`), and
+`error`. Each level includes messages at that severity and higher. All
+categories are enabled, including Quack and HTTP; request details generally
+require `debug`. Unset or empty disables logging. An invalid value emits one
+stderr warning per connection initialization and leaves logging disabled.
+Existing connections retain their logging configuration.
+
+Records start with `[quack]` and include a Unix timestamp in microseconds,
+severity, category, and message. This configures the client, not the server.
+Logging is best-effort: setup or stderr failures do not fail queries.
+DuckDB's built-in HTTP redaction remains in effect, but other categories can
+expose SQL, credentials, and data. Treat captured logs as sensitive.
+
 ## Building
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
