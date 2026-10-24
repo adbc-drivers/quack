@@ -50,6 +50,15 @@ root with CMake. There is no `rust/` or `go/` implementation directory.
 - `validation/queries/` contains txtcase overrides for SQL dialect or result
   differences.
 
+## Fetch Read-Ahead
+
+The database option `quack.fetch_read_ahead` is parsed as an unsigned decimal
+integer and copied into each new connection's local DuckDB settings. Transport
+initialization explicitly loads Quack and sets `quack_fetch_read_ahead` before
+ATTACH when the option is present. Unset leaves DuckDB's default untouched; zero
+selects the async worker count. Ordinary statement SQL runs remotely and cannot
+set this local client option.
+
 ## Client Logging
 
 `quack_logging.cc` reads `ADBC_DRIVER_QUACK_LOG_LEVEL` once after the local
@@ -60,6 +69,15 @@ callback serializes stderr writes across connections and flushes each record;
 it never propagates exceptions. No callback state outlives the database.
 Invalid configuration and setup failures warn without preventing connection
 initialization. Unset or empty configuration leaves logging disabled.
+
+The HTTPFS CMake project hook applies `httpfs-curl-diagnostics.patch` to the
+fetched dependency, accepting an already-applied patch on reconfiguration and
+failing explicitly on incompatible sources. Each curl handle owns its error
+buffer. Transfer errors preserve response headers and add curl details and
+expected/received body-byte counts to `HTTPResponse::request_error`, which feeds
+both the ADBC error and the existing HTTP logger. Header redaction remains in
+DuckDB's logger, and partial response bodies are not returned as successful
+results.
 
 ## Runtime Model
 

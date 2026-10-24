@@ -19,6 +19,37 @@ foreach(previous_project_include IN
   endif()
 endforeach()
 
+# Keep the patch local to the driver's fetched HTTPFS dependency. Accept an
+# already-applied patch so normal CMake reconfiguration remains safe.
+set(httpfs_diagnostics_patch
+    "${CMAKE_CURRENT_LIST_DIR}/../patches/httpfs-curl-diagnostics.patch")
+set_property(
+  DIRECTORY
+  APPEND
+  PROPERTY CMAKE_CONFIGURE_DEPENDS "${httpfs_diagnostics_patch}")
+find_package(Git REQUIRED)
+execute_process(
+  COMMAND "${GIT_EXECUTABLE}" apply --reverse --check
+          "${httpfs_diagnostics_patch}"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  RESULT_VARIABLE httpfs_patch_applied
+  OUTPUT_QUIET ERROR_QUIET)
+if(NOT httpfs_patch_applied EQUAL 0)
+  execute_process(
+    COMMAND "${GIT_EXECUTABLE}" apply --check "${httpfs_diagnostics_patch}"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    RESULT_VARIABLE httpfs_patch_check
+    ERROR_VARIABLE httpfs_patch_error)
+  if(NOT httpfs_patch_check EQUAL 0)
+    message(
+      FATAL_ERROR
+        "Cannot apply HTTPFS curl diagnostics patch: ${httpfs_patch_error}")
+  endif()
+  execute_process(
+    COMMAND "${GIT_EXECUTABLE}" apply "${httpfs_diagnostics_patch}"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" COMMAND_ERROR_IS_FATAL ANY)
+endif()
+
 function(adbc_driver_quack_link_httpfs_zlib)
   find_package(ZLIB REQUIRED)
 

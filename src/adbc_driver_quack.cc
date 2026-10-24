@@ -22,6 +22,7 @@
 #include <duckdb.h>
 
 #include <cctype>
+#include <charconv>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -98,6 +99,7 @@ struct DatabaseState {
   std::string uri;
   adbc_driver_quack::ParsedQuackUri parsed_uri;
   std::optional<adbc_driver_quack::QuackTlsMode> tls;
+  std::optional<uint64_t> fetch_read_ahead;
   bool initialized = false;
 };
 
@@ -1106,6 +1108,19 @@ AdbcStatusCode DriverDatabaseSetOption(AdbcDatabase* database, char const* key,
     return InvalidArgument(error,
                            "database option key and value must not be null");
   }
+  if (std::strcmp(key, "quack.fetch_read_ahead") == 0) {
+    uint64_t depth = 0;
+    auto const* end = value + std::strlen(value);
+    auto const parsed = std::from_chars(value, end, depth);
+    if (parsed.ec != std::errc{} || parsed.ptr != end) {
+      return InvalidArgument(
+          error,
+          "invalid database option 'quack.fetch_read_ahead': expected an "
+          "unsigned decimal integer");
+    }
+    state->fetch_read_ahead = depth;
+    return Ok(error);
+  }
   if (std::strcmp(key, "quack.tls") == 0) {
     auto const tls = adbc_driver_quack::ParseQuackTlsMode(value);
     if (!tls.has_value()) {
@@ -1182,7 +1197,8 @@ AdbcStatusCode DriverConnectionInit(AdbcConnection* connection,
 
   auto const status = adbc_driver_quack::InitializeQuackTransport(
       connection_state->connection, database_state->parsed_uri,
-      database_state->tls.value_or(database_state->parsed_uri.tls));
+      database_state->tls.value_or(database_state->parsed_uri.tls),
+      database_state->fetch_read_ahead);
   if (status.status != ADBC_STATUS_OK) {
     CloseConnectionState(connection_state);
     return StatusError(error, status.status, status.message,
