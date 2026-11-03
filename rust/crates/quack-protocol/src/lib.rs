@@ -25,6 +25,7 @@
 
 pub mod codec;
 pub mod message;
+pub mod state;
 
 /// Protocol version of the supported revision, not an automatic negotiation policy.
 pub const QUACK_VERSION: u64 = 3;
