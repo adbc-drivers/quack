@@ -18,7 +18,7 @@ driver = "quack"
 private = false
 
 [lang.script]
-subdir = "."
+subdir = "cpp"
 
 [lang.script.validation]
 configs = [

@@ -12,5 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.github/workflows/dev_issues.yaml
-third_party/arrow-adbc/include/arrow-adbc/adbc.h
+cpp/third_party/arrow-adbc/include/arrow-adbc/adbc.h

@@ -28,7 +28,7 @@ repos:
     exclude: >
         (?x)^(
             .*Cargo\.toml|
-            third_party/arrow-adbc/LICENSE\.txt
+            cpp/third_party/arrow-adbc/LICENSE\.txt
         )$
 
 - repo: https://github.com/pre-commit/mirrors-clang-format

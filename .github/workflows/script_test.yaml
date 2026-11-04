@@ -29,13 +29,13 @@ on:
     branches:
       - main
     paths:
-      - "**"
+      - "cpp/**"
       - .github/workflows/script_test.yaml
   push:
     branches:
       - main
     paths:
-      - "**"
+      - "cpp/**"
       - .github/workflows/script_test.yaml
 
 
@@ -49,6 +49,8 @@ defaults:
 
 permissions:
   contents: read
+
+
 
 jobs:
   test:
@@ -79,9 +81,9 @@ jobs:
           submodules: 'recursive'
 
 
-      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514  # v0.11.0
+      - uses: prefix-dev/setup-pixi@9936258fee697aff89b3fed6ca1f80a382ef694e  # v0.11.3
         with:
-          pixi-version: v0.72.0
+          pixi-version: v0.83.0
           run-install: false
 
 
@@ -93,7 +95,7 @@ jobs:
           echo "$GHCR_TOKEN" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
 
       - name: Build
-        working-directory: .
+        working-directory: cpp
         run: |
           if [[ -f ci/scripts/pre-build.sh ]]; then
             echo "Loading pre-build"
@@ -113,7 +115,7 @@ jobs:
         # Can't use Docker on macOS AArch64 runners, and Windows containers
         # work but often the container doesn't support Windows
         if: runner.os == 'Linux'
-        working-directory: .
+        working-directory: cpp
         run: |
           if [[ -f compose.yaml ]]; then
             if ! docker compose up --detach --wait test-service; then
@@ -125,7 +127,7 @@ jobs:
           fi
 
       - name: Test
-        working-directory: .
+        working-directory: cpp
         run: |
           set -a
           if [[ -f .env ]]; then
@@ -186,9 +188,9 @@ jobs:
           submodules: 'recursive'
 
 
-      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514  # v0.11.0
+      - uses: prefix-dev/setup-pixi@9936258fee697aff89b3fed6ca1f80a382ef694e  # v0.11.3
         with:
-          pixi-version: v0.72.0
+          pixi-version: v0.83.0
           run-install: false
 
 
@@ -200,7 +202,7 @@ jobs:
           echo "$GHCR_TOKEN" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
 
       - name: Build Library
-        working-directory: .
+        working-directory: cpp
         run: |
           if [[ -f ci/scripts/pre-build.sh ]]; then
             ./ci/scripts/pre-build.sh test ${{ matrix.platform }} ${{ matrix.arch }}
@@ -219,7 +221,7 @@ jobs:
         # Can't use Docker on macOS AArch64 runners, and Windows containers
         # work but often the container doesn't support Windows
         if: runner.os == 'Linux'
-        working-directory: .
+        working-directory: cpp
         run: |
           if [[ -f compose.yaml ]] && [[ -n "${{ matrix.service_name }}" ]]; then
             if ! docker compose up --detach --wait ${{ matrix.service_name }}; then
@@ -232,7 +234,7 @@ jobs:
 
       - name: Validate
         if: runner.os == 'Linux'
-        working-directory: .
+        working-directory: cpp
         run: |
           set -a
           if [[ -f .env ]]; then
@@ -271,18 +273,18 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: validation-report-${{ matrix.vendor_version }}
-          path: "./validation-report-${{ matrix.vendor_version }}.xml"
+          path: "cpp/validation-report-${{ matrix.vendor_version }}.xml"
           retention-days: 7
 
       - name: Generate docs
-        working-directory: .
+        working-directory: cpp
         run: |
           pixi run gendocs --output generated
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: docs-${{ matrix.vendor_version }}
-          path: "./generated/quack.md"
+          path: "cpp/generated/quack.md"
           retention-days: 7
 
   build:
@@ -291,12 +293,14 @@ jobs:
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: true
+      max-parallel: 3
       matrix:
         include:
           - { platform: linux, arch: amd64, runner: ubuntu-latest }
-          - { platform: linux, arch: arm64, runner: ubuntu-24.04-arm }
           - { platform: macos, arch: arm64, runner: macos-latest }
           - { platform: windows, arch: amd64, runner: windows-latest }
+          - { platform: linux, arch: arm64, runner: ubuntu-24.04-arm }
+          - { platform: windows, arch: arm64, runner: windows-11-vs2026-arm }
     permissions:
       contents: read
       packages: read
@@ -309,13 +313,13 @@ jobs:
           submodules: 'recursive'
 
 
-      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514  # v0.11.0
+      - uses: prefix-dev/setup-pixi@9936258fee697aff89b3fed6ca1f80a382ef694e  # v0.11.3
         with:
-          pixi-version: v0.72.0
+          pixi-version: v0.83.0
           run-install: false
 
       - name: Install dev tools
-        working-directory: .
+        working-directory: cpp
         run: |
           pixi install
 
@@ -338,7 +342,7 @@ jobs:
           Split-Path $dumpbin -Parent | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Build Library
-        working-directory: .
+        working-directory: cpp
         run: |
           if [[ -f ci/scripts/pre-build.sh ]]; then
             ./ci/scripts/pre-build.sh release ${{ matrix.platform }} ${{ matrix.arch }}
@@ -360,7 +364,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: drivers-${{ matrix.platform }}-${{ matrix.arch }}
-          path: "./build/libadbc_driver_quack.*"
+          path: "cpp/build/libadbc_driver_quack.*"
           retention-days: 2
 
   package:
@@ -380,9 +384,9 @@ jobs:
           submodules: 'recursive'
 
 
-      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514  # v0.11.0
+      - uses: prefix-dev/setup-pixi@9936258fee697aff89b3fed6ca1f80a382ef694e  # v0.11.3
         with:
-          pixi-version: v0.72.0
+          pixi-version: v0.83.0
           run-install: false
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
@@ -391,11 +395,11 @@ jobs:
           path: "~/drivers"
 
       - name: Install tools
-        working-directory: .
+        working-directory: cpp
         run: |
 
       - name: Generate packages
-        working-directory: .
+        working-directory: cpp
         run: |
           pixi install
 
@@ -421,7 +425,7 @@ jobs:
           path: "~/validation-report"
 
       - name: Generate combined docs
-        working-directory: .
+        working-directory: cpp
         run: |
           ls -laR ~/validation-report
           find ~/validation-report -type f -name '*.xml'
@@ -432,7 +436,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: docs
-          path: "./generated/quack.md"
+          path: "cpp/generated/quack.md"
           retention-days: 2
 
   test-packages:
@@ -442,20 +446,22 @@ jobs:
       - package
     strategy:
       fail-fast: false
+      max-parallel: 3
       matrix:
         include:
           - { platform: linux, arch: amd64, runner: ubuntu-latest }
           - { platform: macos, arch: arm64, runner: macos-latest }
           - { platform: windows, arch: amd64, runner: windows-latest }
+          - { platform: windows, arch: arm64, runner: windows-11-vs2026-arm }
     steps:
       # for now, install dbc from main
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           cache: true
           go-version: 'stable'
-      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514  # v0.11.0
+      - uses: prefix-dev/setup-pixi@9936258fee697aff89b3fed6ca1f80a382ef694e  # v0.11.3
         with:
-          pixi-version: v0.72.0
+          pixi-version: v0.83.0
           run-install: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
@@ -480,7 +486,7 @@ jobs:
           persist-credentials: false
           submodules: 'recursive'
       - name: load package
-        working-directory: .
+        working-directory: cpp
         run: |
           if [[ -f ci/scripts/pre-build.sh ]]; then
             echo "Loading pre-build"
@@ -495,7 +501,8 @@ jobs:
             source .env.ci
           fi
           set +a
-          pixi exec -s adbc-driver-manager -s pyarrow -s pytest python -m pytest -vs ci/test_package.py
+          pixi run pytest -vs ci/test_package.py
+
 
   release:
     name: "Release (Dry Run)"
@@ -514,9 +521,9 @@ jobs:
           persist-credentials: false
           submodules: 'recursive'
 
-      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514  # v0.11.0
+      - uses: prefix-dev/setup-pixi@9936258fee697aff89b3fed6ca1f80a382ef694e  # v0.11.3
         with:
-          pixi-version: v0.72.0
+          pixi-version: v0.83.0
           run-install: false
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
@@ -532,10 +539,10 @@ jobs:
       - name: Release (dry-run)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        working-directory: .
+        working-directory: cpp
         run: |
-          git tag v1000.0.0
-          tag=v1000.0.0
+          git tag cpp/v1000.0.0
+          tag=cpp/v1000.0.0
 
           pixi run release --dry-run $(pwd) $tag
           echo gh release upload $tag $(find ~/packages -name '*.tar.gz') $(find ~/packages -name 'manifest.yaml') $(find ~/packages -name '*.md')
