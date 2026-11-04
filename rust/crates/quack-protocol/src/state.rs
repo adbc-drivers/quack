@@ -217,6 +217,7 @@ enum QueryState {
     AwaitingFetch { index: u64 },
     ReadyAck,
     AwaitingAck,
+    AwaitingCancel,
     Complete,
     Released,
     Failed,
@@ -255,6 +256,25 @@ impl Query {
     }
     pub fn is_failed(&self) -> bool {
         self.state == QueryState::Failed
+    }
+
+    /// Cancel this execution and discard buffered results.
+    pub fn cancel_request(&mut self) -> Result<Message, Error> {
+        match self.state {
+            QueryState::Delivering | QueryState::ReadyFetch | QueryState::ReadyAck => {}
+            _ => return Err(Error("query cannot be cancelled in its current state")),
+        }
+        self.pending.clear();
+        self.state = QueryState::AwaitingCancel;
+        Ok(Message {
+            header: Header {
+                connection_id: self.connection_id.clone(),
+                client_query_id: None,
+            },
+            body: MessageBody::CancelRequest(CancelRequest {
+                query_uuid: self.uuid,
+            }),
+        })
     }
 
     /// Produce the next legal request. Buffered chunks must be drained first.
@@ -326,6 +346,17 @@ impl Query {
 
     /// Accept exactly one outstanding response, retaining no copies of result buffers.
     pub fn response(&mut self, response: Message) -> Result<(), QueryError> {
+        if self.state == QueryState::AwaitingCancel {
+            self.state = QueryState::Failed;
+            return match response.body {
+                MessageBody::SuccessResponse(_) => {
+                    self.state = QueryState::Complete;
+                    Ok(())
+                }
+                MessageBody::ErrorResponse(error) => Err(QueryError::Remote(error)),
+                _ => Err(QueryError::State(Error("unexpected cancellation response"))),
+            };
+        }
         match self.state {
             QueryState::AwaitingPrepare
             | QueryState::AwaitingFetch { .. }

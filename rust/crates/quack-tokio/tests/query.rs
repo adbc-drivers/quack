@@ -496,3 +496,26 @@ async fn fetch_timeout_disconnects() {
     assert!(query.next_chunk().await.unwrap().is_none());
     assert!(connection.execute(params(3)).await.is_err());
 }
+
+#[tokio::test]
+async fn cancellation_releases_session_only_on_success() {
+    for fail in [false, true] {
+        let server = Server::new(move |request| match &request.body {
+            MessageBody::ConnectionRequest(_) => handshake(60),
+            MessageBody::PrepareRequest(p) => prepare(p.query_uuid, true),
+            MessageBody::CancelRequest(c) => {
+                assert_eq!(c.query_uuid, params(1).uuid);
+                if fail { remote(false) } else { success() }
+            }
+            _ => success(),
+        })
+        .await;
+        let mut connection = server.connect().await;
+        let mut query = connection.execute(params(1)).await.unwrap();
+        assert_eq!(query.cancel().await.is_err(), fail);
+        assert!(query.next_chunk().await.unwrap().is_none());
+        query.cancel().await.unwrap();
+        assert_eq!(connection.execute(params(2)).await.is_err(), fail);
+        assert_eq!(server.ids().iter().filter(|id| **id == 12).count(), 1);
+    }
+}

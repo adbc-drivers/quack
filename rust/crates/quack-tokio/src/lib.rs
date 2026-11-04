@@ -252,6 +252,42 @@ impl Query {
         self.protocol.query_uuid()
     }
 
+    /// Cancel an unfinished query, waiting at most two seconds for confirmation.
+    /// Failure or interruption invalidates the session.
+    pub async fn cancel(&mut self) -> Result<(), Error> {
+        if self.done {
+            return Ok(());
+        }
+        let mut operation = Operation {
+            query: self,
+            armed: true,
+        };
+        let result = operation.query.cancel_inner().await;
+        if result.is_err() {
+            operation.query.abandon();
+        }
+        operation.armed = false;
+        result
+    }
+
+    async fn cancel_inner(&mut self) -> Result<(), Error> {
+        self.core.state()?.check_query(&self.protocol)?;
+        let request = self.protocol.cancel_request()?;
+        let response = tokio::time::timeout(
+            CLEANUP_TIMEOUT,
+            exchange(&self.core.client, &self.core.endpoint, request),
+        )
+        .await??;
+        self.core.state()?.check_query(&self.protocol)?;
+        self.protocol.response(response).map_err(|error| -> Error {
+            match error {
+                state::QueryError::Remote(error) => Box::new(RemoteError(error)),
+                error => Box::new(error),
+            }
+        })?;
+        self.finish()
+    }
+
     fn finish(&mut self) -> Result<(), Error> {
         let request = self.core.state()?.finish_query(&mut self.protocol)?;
         self.done = true;

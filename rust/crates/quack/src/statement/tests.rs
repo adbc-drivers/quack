@@ -230,7 +230,7 @@ fn live_nullable_empty_and_multichunk_results() {
 }
 
 #[test]
-fn live_reader_abandonment_disconnects() {
+fn live_reader_abandonment_preserves_session() {
     let Some(database) = database() else {
         return;
     };
@@ -244,10 +244,9 @@ fn live_reader_abandonment_disconnects() {
         )
         .unwrap();
     drop(statement.execute().unwrap());
-    assert_eq!(
-        statement.execute().err().unwrap().status,
-        Status::InvalidState
-    );
+    let mut reader = statement.execute().unwrap();
+    assert!(reader.next().unwrap().is_ok());
+    assert!(reader.next().is_none());
 }
 
 #[test]
