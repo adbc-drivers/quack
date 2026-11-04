@@ -17,3 +17,6 @@ resolver = "2"
 members = [
     "crates/*",
 ]
+
+[workspace.package]
+license = "Apache-2.0"

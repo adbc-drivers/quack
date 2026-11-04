@@ -16,6 +16,7 @@
 name = "quack-tokio"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 
 [dependencies]
 quack-protocol = { path = "../quack-protocol" }

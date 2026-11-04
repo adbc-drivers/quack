@@ -16,6 +16,7 @@
 name = "duckdb-wiredata"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 
 [dev-dependencies]
 rstest = "0.26"
