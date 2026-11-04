@@ -186,7 +186,11 @@ There is no separate current wire EXECUTE or bind-parameters message. PREPARE st
 
 ### PREPARE_RESPONSE (4)
 
-The Rust codec decodes this metadata using `duckdb-wiredata`. It accepts absent or empty inline results and rejects nonempty results explicitly; request `inline_rows=0` for this supported path. Unsupported type descriptors also produce decoding errors. `PrepareResponse::from_body` validates owned body bytes and exposes immutable metadata accessors while retaining the original allocation for byte-preserving re-encoding. Constructor error offsets are body-relative; message decoder errors are relative to the complete message.
+The Rust codec decodes metadata and inline INTEGER chunks using `duckdb-wiredata`. `PrepareResponse::from_body` validates shared body bytes and exposes immutable metadata and chunk accessors while retaining the original allocation for byte-preserving re-encoding. FETCH payload decoding validates the declared number of bare chunks and rejects trailing bytes. INTEGER values support flat, constant, dictionary, and sequence encodings; unsupported value types produce explicit errors. Constructor error offsets are body-relative; message decoder errors are relative to the complete message.
+
+The Rust query state machine delivers inline chunks before scheduling sequential FETCH requests, validates schemas, UUIDs, indices, and terminal totals, and sends a best-effort whole-query acknowledgement before releasing the session. `quack-tokio::Connection::execute` returns an owned query handle with schema accessors and incremental `next_chunk` delivery. Abandoning an unfinished query disconnects the session. The ADBC driver exposes this through a streaming Arrow reader and the integer statement option `quack.inline_rows` (unset uses the server default, zero forces FETCH, positive values request inline rows).
+
+HTTP response bodies and decoded chunk buffers share immutable byte ownership. On little-endian hosts, aligned flat INTEGER value blobs and flat validity bitmaps become Arrow buffers directly. Unaligned values, big-endian conversion, and compressed vectors materialize directly into final Arrow buffers. The zero-copy boundary starts at the completed HTTP response body; HTTP aggregation can allocate or copy. Retaining an Arrow buffer can retain the entire response allocation, even after the query and session have been destroyed.
 
 [Codec](https://github.com/duckdb/duckdb-quack/blob/f96420ed46aee9c42064bdb99ddfd1230d6c0086/src/serialize_quack_message.cpp#L160).
 

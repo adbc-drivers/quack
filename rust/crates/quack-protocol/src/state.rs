@@ -171,51 +171,244 @@ pub struct QueryParams {
     pub inline_rows: Option<u64>,
 }
 
+/// Query failures retain decoding and remote error details for adapters.
+#[derive(Debug)]
+pub enum QueryError {
+    State(Error),
+    Decode(crate::codec::DecodeError),
+    Remote(ErrorResponse),
+}
+
+impl std::fmt::Display for QueryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::State(error) => error.fmt(f),
+            Self::Decode(error) => error.fmt(f),
+            Self::Remote(error) => write!(
+                f,
+                "{}: {}",
+                String::from_utf8_lossy(error.exception_type.as_bytes()),
+                String::from_utf8_lossy(error.message.as_bytes())
+            ),
+        }
+    }
+}
+impl std::error::Error for QueryError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::State(error) => Some(error),
+            Self::Decode(error) => Some(error),
+            Self::Remote(_) => None,
+        }
+    }
+}
+impl From<crate::codec::DecodeError> for QueryError {
+    fn from(error: crate::codec::DecodeError) -> Self {
+        Self::Decode(error)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
 enum QueryState {
-    Awaiting,
-    Outstanding,
+    ReadyPrepare,
+    AwaitingPrepare,
+    Delivering,
+    ReadyFetch,
+    AwaitingFetch { index: u64 },
+    ReadyAck,
+    AwaitingAck,
     Complete,
+    Released,
     Failed,
 }
 
 pub struct Query {
     execution: std::sync::Arc<()>,
-    request: Option<Message>,
+    prepare_request: Option<PrepareRequest>,
+    connection_id: WireString,
     uuid: HugeInt,
     state: QueryState,
+    result_types: Vec<duckdb_wiredata::logical_type::LogicalType>,
+    result_names: Vec<WireString>,
+    pending: std::collections::VecDeque<duckdb_wiredata::chunk::DataChunk>,
+    next_fetch: u64,
+    accepted_batches: u64,
+    terminal: bool,
 }
 
 impl Query {
+    pub fn result_types(&self) -> &[duckdb_wiredata::logical_type::LogicalType] {
+        &self.result_types
+    }
+    pub fn result_names(&self) -> &[WireString] {
+        &self.result_names
+    }
+    pub fn query_uuid(&self) -> HugeInt {
+        self.uuid
+    }
+    pub fn is_complete(&self) -> bool {
+        matches!(self.state, QueryState::Complete | QueryState::Released)
+    }
+    /// Whether a failure of the outstanding exchange is cleanup-only.
+    pub fn is_acknowledging(&self) -> bool {
+        self.state == QueryState::AwaitingAck
+    }
+    pub fn is_failed(&self) -> bool {
+        self.state == QueryState::Failed
+    }
+
+    /// Produce the next legal request. Buffered chunks must be drained first.
     pub fn request(&mut self) -> Result<Message, Error> {
-        self.request
-            .take()
-            .ok_or(Error("query request already taken"))
-    }
-
-    pub fn response(&mut self, response: Message) -> Result<PrepareResponse, Error> {
-        if !matches!(self.state, QueryState::Awaiting) || self.request.is_some() {
-            return Err(Error("query is not awaiting a response"));
-        }
-        self.state = QueryState::Failed;
-        match response.body {
-            MessageBody::PrepareResponse(body) if body.query_uuid() == self.uuid => {
-                self.state = if body.needs_more_fetch() {
-                    QueryState::Outstanding
-                } else {
-                    QueryState::Complete
-                };
-                Ok(body)
+        let body = match self.state {
+            QueryState::ReadyPrepare => {
+                let request = self
+                    .prepare_request
+                    .take()
+                    .ok_or(Error("missing prepare request"))?;
+                self.state = QueryState::AwaitingPrepare;
+                MessageBody::PrepareRequest(request)
             }
-            _ => Err(Error("unexpected query response")),
+            QueryState::ReadyFetch => {
+                self.state = QueryState::AwaitingFetch {
+                    index: self.next_fetch,
+                };
+                MessageBody::FetchRequest(FetchRequest {
+                    query_uuid: self.uuid,
+                    batch_index: self.next_fetch,
+                    ack_index: self.accepted_batches,
+                })
+            }
+            QueryState::ReadyAck => {
+                self.state = QueryState::AwaitingAck;
+                MessageBody::Acknowledgement(Acknowledgement {
+                    query_uuid: self.uuid,
+                })
+            }
+            _ => return Err(Error("query is not ready to send a request")),
+        };
+        Ok(Message {
+            header: Header {
+                connection_id: self.connection_id.clone(),
+                client_query_id: None,
+            },
+            body,
+        })
+    }
+
+    /// Move a buffered chunk out. `None` means send a request or observe completion.
+    pub fn next_chunk(&mut self) -> Result<Option<duckdb_wiredata::chunk::DataChunk>, Error> {
+        match self.state {
+            QueryState::Delivering => {
+                let chunk = self
+                    .pending
+                    .pop_front()
+                    .ok_or(Error("missing buffered chunk"))?;
+                self.advance_delivery();
+                Ok(Some(chunk))
+            }
+            QueryState::ReadyFetch
+            | QueryState::ReadyAck
+            | QueryState::Complete
+            | QueryState::Released => Ok(None),
+            _ => Err(Error("query is not ready to deliver chunks")),
         }
     }
 
-    pub fn remote_error(&mut self, invalidate: bool) {
+    fn advance_delivery(&mut self) {
+        self.state = if !self.pending.is_empty() {
+            QueryState::Delivering
+        } else if self.terminal {
+            QueryState::ReadyAck
+        } else {
+            QueryState::ReadyFetch
+        };
+    }
+
+    /// Accept exactly one outstanding response, retaining no copies of result buffers.
+    pub fn response(&mut self, response: Message) -> Result<(), QueryError> {
+        match self.state {
+            QueryState::AwaitingPrepare
+            | QueryState::AwaitingFetch { .. }
+            | QueryState::AwaitingAck => {}
+            _ => return Err(QueryError::State(Error("query is not awaiting a response"))),
+        }
+        if let MessageBody::ErrorResponse(error) = response.body {
+            self.remote_error(error.must_invalidate)
+                .map_err(QueryError::State)?;
+            return Err(QueryError::Remote(error));
+        }
+        let awaiting = std::mem::replace(&mut self.state, QueryState::Failed);
+        // A failed validation leaves the query failed, so it cannot release the session.
+        match (awaiting, response.body) {
+            (QueryState::AwaitingPrepare, MessageBody::PrepareResponse(body)) => {
+                if body.query_uuid() != self.uuid {
+                    return Err(QueryError::State(Error("query UUID does not match")));
+                }
+                let parts = body.into_parts();
+                self.result_types = parts.result_types;
+                self.result_names = parts.result_names;
+                self.pending = parts.results.into();
+                self.terminal = !parts.needs_more_fetch;
+                self.advance_delivery();
+                Ok(())
+            }
+            (QueryState::AwaitingFetch { index }, MessageBody::FetchResponse(body)) => {
+                let chunks = body.decode_chunks()?;
+                if body.chunk_count == 0 {
+                    if body.batch_index.is_some()
+                        || body
+                            .total_batches
+                            .is_some_and(|total| total != self.accepted_batches)
+                    {
+                        return Err(QueryError::State(Error("invalid terminal fetch response")));
+                    }
+                    self.terminal = true;
+                } else {
+                    if body.batch_index != Some(index) {
+                        return Err(QueryError::State(Error("fetch batch index does not match")));
+                    }
+                    for chunk in &chunks {
+                        crate::codec::validate_chunk_schema(&self.result_types, chunk)?;
+                    }
+                    self.next_fetch = index
+                        .checked_add(1)
+                        .ok_or(QueryError::State(Error("fetch batch index overflow")))?;
+                    self.accepted_batches = index;
+                }
+                self.pending = chunks.into();
+                self.advance_delivery();
+                Ok(())
+            }
+            (QueryState::AwaitingAck, MessageBody::SuccessResponse(_)) => {
+                self.state = QueryState::Complete;
+                Ok(())
+            }
+            _ => Err(QueryError::State(Error("unexpected query response"))),
+        }
+    }
+
+    /// Apply a decoded remote error only to an outstanding exchange.
+    pub fn remote_error(&mut self, invalidate: bool) -> Result<(), Error> {
+        match self.state {
+            QueryState::AwaitingPrepare
+            | QueryState::AwaitingFetch { .. }
+            | QueryState::AwaitingAck => {}
+            _ => return Err(Error("query is not awaiting a response")),
+        }
+        self.pending.clear();
         self.state = if invalidate {
             QueryState::Failed
         } else {
             QueryState::Complete
         };
+        Ok(())
+    }
+
+    /// Invalidate an execution after transport failure or abandonment.
+    pub fn fail(&mut self) {
+        self.pending.clear();
+        self.prepare_request = None;
+        self.state = QueryState::Failed;
     }
 }
 
@@ -224,41 +417,60 @@ impl Connection {
         if self.state != ConnectionState::Connected {
             return Err(Error("connection is not idle"));
         }
+        if params.uuid == HugeInt::default() {
+            return Err(Error("query UUID must be nonzero"));
+        }
         self.execution = std::sync::Arc::new(());
         self.state = ConnectionState::Busy;
         Ok(Query {
             execution: self.execution.clone(),
             uuid: params.uuid,
-            state: QueryState::Awaiting,
-            request: Some(Message {
-                header: Header {
-                    connection_id: self.id.clone(),
-                    client_query_id: None,
-                },
-                body: MessageBody::PrepareRequest(PrepareRequest {
-                    sql_query: params.query,
-                    query_uuid: params.uuid,
-                    inline_rows: params.inline_rows,
-                }),
+            state: QueryState::ReadyPrepare,
+            connection_id: self.id.clone(),
+            prepare_request: Some(PrepareRequest {
+                sql_query: params.query,
+                query_uuid: params.uuid,
+                inline_rows: params.inline_rows,
             }),
+            result_types: Vec::new(),
+            result_names: Vec::new(),
+            pending: std::collections::VecDeque::new(),
+            next_fetch: 1,
+            accepted_batches: 0,
+            terminal: false,
         })
     }
 
-    pub fn finish_query(&mut self, query: Query) -> Result<Option<Message>, Error> {
+    /// Check execution identity and that the session has not been disconnected.
+    pub fn check_query(&self, query: &Query) -> Result<(), Error> {
+        if !std::sync::Arc::ptr_eq(&self.execution, &query.execution) {
+            return Err(Error("query belongs to another execution"));
+        }
+        if self.state != ConnectionState::Busy {
+            return Err(Error("connection has no active query"));
+        }
+        Ok(())
+    }
+
+    pub fn finish_query(&mut self, query: &mut Query) -> Result<Option<Message>, Error> {
         if !std::sync::Arc::ptr_eq(&self.execution, &query.execution) {
             return Err(Error("query belongs to another execution"));
         }
         if self.state == ConnectionState::Disconnected {
+            query.fail();
             return Ok(None);
         }
+        self.check_query(query)?;
         match query.state {
             QueryState::Complete => {
                 self.state = ConnectionState::Connected;
+                query.state = QueryState::Released;
                 Ok(None)
             }
             _ => {
                 let request = self.pre_disconnect()?;
                 self.disconnect();
+                query.fail();
                 Ok(Some(request))
             }
         }
@@ -266,65 +478,5 @@ impl Connection {
 }
 
 #[cfg(test)]
-mod query_tests {
-    use super::*;
-    fn connected() -> Connection {
-        let mut connection = Connection::new();
-        connection
-            .pre_connect(ConnectionOptions::default())
-            .unwrap();
-        connection
-            .connect(
-                Header {
-                    connection_id: "session".into(),
-                    client_query_id: None,
-                },
-                ConnectionResponse {
-                    quack_version: QUACK_VERSION,
-                    heartbeat_timeout_seconds: 60,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        connection
-    }
-    fn params() -> QueryParams {
-        QueryParams {
-            query: "SELECT 42".into(),
-            uuid: HugeInt { upper: 0, lower: 1 },
-            inline_rows: Some(0),
-        }
-    }
-    #[test]
-    fn unfinished_query_disconnects() {
-        let mut connection = connected();
-        let mut query = connection.prepare(params()).unwrap();
-        assert!(connection.prepare(params()).is_err());
-        assert!(connection.heartbeat().is_ok());
-        let request = query.request().unwrap();
-        assert_eq!(request.header.connection_id, WireString::from("session"));
-        assert!(query.request().is_err());
-        assert!(connection.finish_query(query).unwrap().is_some());
-        assert!(connection.prepare(params()).is_err());
-    }
-    #[test]
-    fn recoverable_error_releases_connection() {
-        let mut connection = connected();
-        let mut query = connection.prepare(params()).unwrap();
-        query.request().unwrap();
-        query.remote_error(false);
-        assert!(connection.finish_query(query).unwrap().is_none());
-        assert!(connection.prepare(params()).is_ok());
-    }
-    #[test]
-    fn wrong_connection_and_late_return() {
-        let mut first = connected();
-        let mut second = connected();
-        let query = first.prepare(params()).unwrap();
-        assert!(second.finish_query(query).is_err());
-        let query = second.prepare(params()).unwrap();
-        second.disconnect();
-        assert!(second.finish_query(query).unwrap().is_none());
-        assert!(second.heartbeat().is_err());
-    }
-}
+#[path = "state_tests.rs"]
+mod query_tests;

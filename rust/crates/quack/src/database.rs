@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::connection::QuackConnection;
+use crate::connection::{QuackConnection, Session};
 use crate::error::ErrorHelper;
 use adbc_core::error::Result;
 use adbc_core::options::{OptionConnection, OptionDatabase, OptionValue};
@@ -137,8 +137,10 @@ impl Database for QuackDatabase {
                     .to_adbc()
             })?;
         Ok(QuackConnection {
-            connection,
-            runtime,
+            session: std::sync::Arc::new(Session {
+                connection: std::sync::Mutex::new(connection),
+                runtime,
+            }),
         })
     }
 }

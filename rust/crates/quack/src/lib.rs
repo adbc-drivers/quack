@@ -19,10 +19,28 @@
 //! to certificate verification; `false` selects HTTP and `skip_verify`
 //! (or `skip-verify`) disables certificate verification.
 //!
-//! Connections own a share of a background Tokio runtime. Call this
-//! synchronous driver outside a Tokio runtime context.
+//! Set SQL on a statement and execute it to obtain a streaming Arrow reader.
+//! INTEGER results, including nulls and flat/constant/dictionary/sequence
+//! encodings, map to nullable Arrow Int32 columns. The integer statement option
+//! `quack.inline_rows` controls PREPARE delivery: unset uses the server default,
+//! zero forces FETCH, and positive values request inline rows. A positive
+//! threshold may still require a terminal FETCH after delivering inline rows.
+//!
+//! One query may be active per session. Consume the reader through EOF before
+//! executing another query. Dropping an unfinished reader disconnects the
+//! session. Readers retain session ownership when statements or connection
+//! wrappers are dropped; returned batches own their buffers independently.
+//!
+//! Aligned flat INTEGER values on little-endian hosts and flat validity masks
+//! share the received DuckDB buffers directly with Arrow. Other values are
+//! materialized into final Arrow allocations. HTTP aggregation may copy before
+//! decoding, and retaining a small buffer can retain the whole response body.
+//!
+//! Connections, statements, and readers share a background Tokio runtime.
+//! Call this synchronous driver outside a Tokio runtime context.
 
 mod connection;
+mod conversion;
 mod database;
 mod driver;
 mod error;

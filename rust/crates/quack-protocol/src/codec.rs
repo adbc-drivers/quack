@@ -13,12 +13,15 @@
 // limitations under the License.
 
 use crate::message::*;
+use bytes::Bytes;
+use duckdb_wiredata::{chunk::DataChunk, decode::DecodeErrorKind};
 use std::fmt;
 
 const END: u16 = u16::MAX;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct DecodeError {
+    pub kind: DecodeErrorKind,
     pub offset: usize,
     pub context: &'static str,
     pub message: String,
@@ -64,6 +67,12 @@ impl EncodedMessage<'_> {
         bytes.extend_from_slice(self.payload);
         bytes
     }
+
+    /// Move the prefix and append any payload, avoiding a prefix clone.
+    pub fn into_vec(mut self) -> Vec<u8> {
+        self.prefix.extend_from_slice(self.payload);
+        self.prefix
+    }
 }
 
 struct Reader<'a> {
@@ -75,6 +84,7 @@ struct Reader<'a> {
 impl<'a> Reader<'a> {
     fn error(&self, message: impl Into<String>) -> DecodeError {
         DecodeError {
+            kind: DecodeErrorKind::Malformed,
             offset: self.pos,
             context: self.context,
             message: message.into(),
@@ -211,6 +221,7 @@ impl<'a> Reader<'a> {
         for _ in 0..count {
             let (value, consumed) = duckdb_wiredata::decode::logical_type(&self.bytes[self.pos..])
                 .map_err(|error| DecodeError {
+                    kind: error.kind,
                     offset: self.pos + error.offset,
                     context: error.context,
                     message: error.message,
@@ -250,14 +261,7 @@ impl<'a> Reader<'a> {
     }
 }
 
-type PrepareMetadata = (
-    Vec<duckdb_wiredata::logical_type::LogicalType>,
-    Vec<WireString>,
-    bool,
-    HugeInt,
-);
-
-pub(crate) fn decode_prepare_body(bytes: &[u8]) -> Result<PrepareMetadata, DecodeError> {
+pub(crate) fn decode_prepare_body(bytes: &Bytes) -> Result<PrepareResponseParts, DecodeError> {
     let mut reader = Reader {
         bytes,
         pos: 0,
@@ -270,6 +274,9 @@ pub(crate) fn decode_prepare_body(bytes: &[u8]) -> Result<PrepareMetadata, Decod
         Reader::logical_types,
     )?;
     let names = reader.field(2, "PrepareResponse.result_names", false, Reader::strings)?;
+    if types.len() != names.len() {
+        return Err(reader.error("result type and name counts differ"));
+    }
     let more = reader.field(
         3,
         "PrepareResponse.needs_more_fetch",
@@ -277,15 +284,98 @@ pub(crate) fn decode_prepare_body(bytes: &[u8]) -> Result<PrepareMetadata, Decod
         Reader::boolean,
     )?;
     let count = reader.field(4, "PrepareResponse.results", false, Reader::u64)?;
-    if count != 0 {
-        return Err(reader.error("nonempty inline results are unsupported; request inline_rows=0"));
+    // Each wrapper has a pointer byte, field ID, chunk, and terminator.
+    if count > ((bytes.len() - reader.pos) / 5) as u64 {
+        return Err(reader.error("inline chunk count exceeds remaining input"));
+    }
+    let mut results = Vec::new();
+    results
+        .try_reserve_exact(count as usize)
+        .map_err(|_| reader.error("cannot allocate inline chunks"))?;
+    for _ in 0..count {
+        reader.context = "PrepareResponse.results.pointer";
+        if !reader.boolean()? {
+            return Err(reader.error("null inline chunk pointer"));
+        }
+        reader.field(300, "PrepareResponse.results.chunk", true, |_| Ok(()))?;
+        let start = reader.pos;
+        let (chunk, consumed) = duckdb_wiredata::chunk::decode(bytes.slice(start..))
+            .map_err(|error| chunk_error(error, start))?;
+        reader.pos += consumed;
+        validate_chunk_schema(&types, &chunk).map_err(|mut error| {
+            error.offset = start;
+            error
+        })?;
+        reader.end("PrepareResponse.results.wrapper")?;
+        results.push(chunk);
     }
     let uuid = reader.field(5, "PrepareResponse.query_uuid", true, Reader::hugeint)?;
     reader.end("PrepareResponse")?;
     if reader.pos != bytes.len() {
         return Err(reader.error("trailing bytes after prepare response"));
     }
-    Ok((types, names, more, uuid))
+    Ok(PrepareResponseParts {
+        result_types: types,
+        result_names: names,
+        needs_more_fetch: more,
+        query_uuid: uuid,
+        results,
+    })
+}
+
+fn chunk_error(error: duckdb_wiredata::decode::DecodeError, start: usize) -> DecodeError {
+    DecodeError {
+        kind: error.kind,
+        offset: start + error.offset,
+        context: error.context,
+        message: error.message,
+    }
+}
+
+/// Validate a result chunk against the schema advertised by PREPARE.
+pub fn validate_chunk_schema(
+    types: &[duckdb_wiredata::logical_type::LogicalType],
+    chunk: &DataChunk,
+) -> Result<(), DecodeError> {
+    if chunk.types() != types {
+        return Err(DecodeError {
+            kind: DecodeErrorKind::Malformed,
+            offset: 0,
+            context: "result schema",
+            message: "chunk types differ from PREPARE result types".into(),
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn decode_fetch_chunks(
+    bytes: &Bytes,
+    count: u64,
+) -> Result<Vec<DataChunk>, DecodeError> {
+    let mut reader = Reader {
+        bytes,
+        pos: 0,
+        context: "FetchResponse.payload",
+    };
+    // Every chunk has at least an object terminator. Bound iteration before allocating.
+    if count > (bytes.len() / 2) as u64 {
+        return Err(reader.error("chunk count exceeds remaining input"));
+    }
+    let mut chunks = Vec::new();
+    chunks
+        .try_reserve_exact(count as usize)
+        .map_err(|_| reader.error("cannot allocate FETCH chunks"))?;
+    for _ in 0..count {
+        let start = reader.pos;
+        let (chunk, consumed) = duckdb_wiredata::chunk::decode(bytes.slice(start..))
+            .map_err(|error| chunk_error(error, start))?;
+        reader.pos += consumed;
+        chunks.push(chunk);
+    }
+    if reader.pos != bytes.len() {
+        return Err(reader.error("trailing bytes after FETCH chunks"));
+    }
+    Ok(chunks)
 }
 
 struct Writer {
@@ -390,8 +480,9 @@ fn payload_consistent(count: u64, bytes: &[u8]) -> bool {
 }
 
 /// Decode a complete HTTP body, reusing its allocation for any opaque payload.
-/// Appended chunk payloads remain opaque. Prepare bodies require empty inline results.
-pub fn decode(input: Vec<u8>) -> Result<Message, DecodeError> {
+/// Appended chunk payloads remain opaque until explicitly decoded; inline chunks are validated.
+pub fn decode(input: impl Into<Bytes>) -> Result<Message, DecodeError> {
+    let input = input.into();
     let mut reader = Reader {
         bytes: &input,
         pos: 0,
@@ -559,6 +650,7 @@ pub fn decode(input: Vec<u8>) -> Result<Message, DecodeError> {
         }),
         _ => {
             return Err(DecodeError {
+                kind: DecodeErrorKind::Unsupported,
                 offset: 2,
                 context: "header.type",
                 message: format!("unsupported message ID {id}"),

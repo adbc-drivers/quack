@@ -17,8 +17,9 @@
 //!
 //! This codec targets little-endian peers. Protocol version alone does not
 //! identify compatible schemas. HTTP transport and session rules are external.
-//! PREPARE_RESPONSE metadata is decoded; nonempty inline results are unsupported.
-//! Appended chunks remain opaque and unvalidated.
+//! PREPARE_RESPONSE metadata and inline INTEGER chunks are decoded into shared
+//! buffer views. FETCH payloads remain available as raw bytes and can be decoded
+//! with strict chunk-count and schema validation before delivery.
 //! Decoding moves the input allocation into its opaque field without copying;
 //! the field retains the entire allocation, including the parsed prefix.
 //! Encoding borrows that field and allocates only the metadata prefix.

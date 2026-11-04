@@ -22,22 +22,39 @@ use arrow_schema::Schema;
 use driverbase::error::ErrorHelper as _;
 use std::collections::HashSet;
 
-pub struct QuackConnection {
-    pub(crate) connection: quack_tokio::Connection,
+pub(crate) struct Session {
+    pub(crate) connection: std::sync::Mutex<quack_tokio::Connection>,
     pub(crate) runtime: std::sync::Arc<tokio::runtime::Runtime>,
 }
 
-impl Drop for QuackConnection {
-    fn drop(&mut self) {
-        let _ = self.runtime.block_on(self.connection.disconnect());
+impl Session {
+    pub(crate) fn connection(&self) -> Result<std::sync::MutexGuard<'_, quack_tokio::Connection>> {
+        self.connection.lock().map_err(|error| {
+            ErrorHelper::invalid_state()
+                .context("access Quack session")
+                .message(error.to_string())
+                .to_adbc()
+        })
     }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        if let Ok(connection) = self.connection.get_mut() {
+            let _ = self.runtime.block_on(connection.disconnect());
+        }
+    }
+}
+
+pub struct QuackConnection {
+    pub(crate) session: std::sync::Arc<Session>,
 }
 
 impl Connection for QuackConnection {
     type StatementType = QuackStatement;
 
     fn new_statement(&mut self) -> Result<Self::StatementType> {
-        Ok(QuackStatement {})
+        Ok(QuackStatement::new(std::sync::Arc::clone(&self.session)))
     }
 
     fn cancel(&mut self) -> Result<()> {
