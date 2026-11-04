@@ -12,6 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-license.tpl
-pixi.lock
-vcpkg.json
+cpp/license.tpl
+cpp/pixi.lock
+cpp/vcpkg.json
