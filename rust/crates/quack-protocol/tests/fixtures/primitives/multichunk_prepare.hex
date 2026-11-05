@@ -1,0 +1,20 @@
+# Copyright (c) 2026 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Captured from live server, V2_0_0 little-endian; exact response bytes.
+# DuckDB: v2.0.0; platform: linux_amd64; Quack: 3
+# SQL: SELECT i::BIGINT AS i64, (i % 256)::UTINYINT AS u8, (i % 2 = 0)::BOOLEAN AS b FROM range(2050) t(i) ORDER BY i
+# inline_rows: Some(0); UUID: HugeInt { upper: 0, lower: 103 }
+01 00 04 03 00 ff ff ff ff ff ff ff ff ff 01 ff ff 01 00 03 64 00 0e ff ff 64 00 1c ff ff 64 00
+0a ff ff 02 00 03 03 69 36 34 02 75 38 01 62 03 00 01 05 00 00 67 ff ff

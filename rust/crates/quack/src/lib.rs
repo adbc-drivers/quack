@@ -49,3 +49,6 @@ mod statement;
 use adbc_ffi::export_driver;
 
 export_driver!(AdbcDriverQuackInit, driver::QuackDriver);
+
+#[cfg(test)]
+mod primitive_tests;

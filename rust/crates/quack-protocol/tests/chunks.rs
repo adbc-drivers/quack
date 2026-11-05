@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use bytes::Bytes;
-use duckdb_wiredata::{chunk::IntegerEncoding, decode::DecodeErrorKind};
+use duckdb_wiredata::{chunk::PrimitiveEncoding, decode::DecodeErrorKind};
 use quack_protocol::{codec, message::*};
 
 fn fixture(text: &str) -> Vec<u8> {
@@ -139,7 +139,7 @@ fn inline_and_fetch_buffers_share_input_and_survive_owners() {
             _ => panic!("unexpected response"),
         };
         assert_eq!(chunks[0].types().len(), 1);
-        let IntegerEncoding::Flat { values, .. } = chunks[0].columns()[0].encoding() else {
+        let PrimitiveEncoding::Flat { values, .. } = chunks[0].columns()[0].encoding() else {
             panic!("expected flat")
         };
         let start = owner.as_ptr() as usize;
@@ -147,7 +147,7 @@ fn inline_and_fetch_buffers_share_input_and_survive_owners() {
         let value_ptr = values.as_ptr();
         drop(owner);
         assert_eq!(chunks[0].columns()[0].get(0), Some(Some(42)));
-        let IntegerEncoding::Flat { values, .. } = chunks[0].columns()[0].encoding() else {
+        let PrimitiveEncoding::Flat { values, .. } = chunks[0].columns()[0].encoding() else {
             panic!("expected flat")
         };
         assert_eq!(value_ptr, values.as_ptr());
@@ -170,7 +170,7 @@ fn malformed_inline_wrappers_and_schema_fail() {
     let chunk_type = pointer + 3 + 6;
     assert_eq!(&wire[chunk_type..chunk_type + 3], &[100, 0, 13]);
     let mut unsupported = wire.clone();
-    unsupported[chunk_type + 2] = 10;
+    unsupported[chunk_type + 2] = 25;
     let error = codec::decode(unsupported).unwrap_err();
     assert_eq!(error.kind, DecodeErrorKind::Unsupported);
 

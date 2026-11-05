@@ -16,11 +16,13 @@
 
 use std::{mem::align_of, sync::Arc};
 
-use arrow_array::{ArrayRef, Int32Array, RecordBatch, RecordBatchOptions};
+use arrow_array::{
+    ArrayRef, BooleanArray, PrimitiveArray, RecordBatch, RecordBatchOptions, types::*,
+};
 use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, ScalarBuffer};
 use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
 use duckdb_wiredata::{
-    chunk::{DataChunk, IntegerEncoding, IntegerVector},
+    chunk::{DataChunk, Primitive, PrimitiveEncoding, PrimitiveVector},
     logical_type::{LogicalType, LogicalTypeId},
 };
 use quack_protocol::message::WireString;
@@ -36,30 +38,26 @@ pub(crate) fn schema(types: &[LogicalType], names: &[WireString]) -> Result<Sche
         .try_reserve_exact(types.len())
         .map_err(|error| ArrowError::ExternalError(Box::new(error)))?;
     for (logical_type, name) in types.iter().zip(names) {
-        if logical_type.id != LogicalTypeId::Integer {
-            return Err(ArrowError::NotYetImplemented(format!(
-                "unsupported result type {:?}",
-                logical_type.id
-            )));
-        }
         let name = name
             .as_str()
             .map_err(|error| ArrowError::ExternalError(Box::new(error)))?;
-        fields.push(Field::new(name, DataType::Int32, true));
+        fields.push(Field::new(name, data_type(logical_type.id)?, true));
     }
     Ok(Arc::new(Schema::new(fields)))
 }
 
 pub(crate) fn record_batch(chunk: DataChunk, schema: SchemaRef) -> Result<RecordBatch, ArrowError> {
-    if schema.fields().len() != chunk.columns().len()
-        || schema
-            .fields()
-            .iter()
-            .any(|field| field.data_type() != &DataType::Int32)
-    {
+    if schema.fields().len() != chunk.columns().len() {
         return Err(ArrowError::SchemaError(
-            "chunk does not match INTEGER Arrow schema".into(),
+            "chunk column count differs from Arrow schema".into(),
         ));
+    }
+    for (logical_type, field) in chunk.types().iter().zip(schema.fields()) {
+        if &data_type(logical_type.id)? != field.data_type() {
+            return Err(ArrowError::SchemaError(
+                "chunk type differs from Arrow schema".into(),
+            ));
+        }
     }
     let rows = chunk.rows();
     let mut arrays: Vec<ArrayRef> = Vec::new();
@@ -67,7 +65,7 @@ pub(crate) fn record_batch(chunk: DataChunk, schema: SchemaRef) -> Result<Record
         .try_reserve_exact(chunk.columns().len())
         .map_err(|error| ArrowError::ExternalError(Box::new(error)))?;
     for column in chunk.into_columns() {
-        arrays.push(Arc::new(integer_array(&column)?));
+        arrays.push(array(&column)?);
     }
     RecordBatch::try_new_with_options(
         schema,
@@ -76,40 +74,48 @@ pub(crate) fn record_batch(chunk: DataChunk, schema: SchemaRef) -> Result<Record
     )
 }
 
-fn integer_array(vector: &IntegerVector) -> Result<Int32Array, ArrowError> {
-    if let IntegerEncoding::Flat { values, validity } = vector.encoding() {
+fn numeric_array<T: ArrowPrimitiveType>(
+    vector: &PrimitiveVector,
+) -> Result<PrimitiveArray<T>, ArrowError>
+where
+    T::Native: Primitive,
+{
+    if let PrimitiveEncoding::Flat { values, validity } = vector.encoding() {
         let expected = vector
             .len()
-            .checked_mul(size_of::<i32>())
-            .ok_or_else(|| ArrowError::ComputeError("INTEGER values size overflow".into()))?;
+            .checked_mul(size_of::<T::Native>())
+            .ok_or_else(|| ArrowError::ComputeError("primitive values size overflow".into()))?;
         if values.len() != expected {
             return Err(ArrowError::ComputeError(
-                "INTEGER values size differs from row count".into(),
+                "primitive values size differs from row count".into(),
             ));
         }
-        let values = if cfg!(target_endian = "little")
-            && values.as_ptr().align_offset(align_of::<i32>()) == 0
-        {
-            // Length and native alignment are checked before ScalarBuffer's constructor.
-            ScalarBuffer::from(Buffer::from(values.clone()))
-        } else {
-            let mut decoded = Vec::new();
-            decoded
-                .try_reserve_exact(vector.len())
-                .map_err(|error| ArrowError::ExternalError(Box::new(error)))?;
-            for value in values.as_chunks::<4>().0 {
-                decoded.push(i32::from_le_bytes([value[0], value[1], value[2], value[3]]));
-            }
-            ScalarBuffer::from(decoded)
-        };
+        let values =
+            if cfg!(target_endian = "little")
+                && values.as_ptr().align_offset(align_of::<T::Native>()) == 0
+            {
+                // Length and native alignment are checked before ScalarBuffer's constructor.
+                ScalarBuffer::from(Buffer::from(values.clone()))
+            } else {
+                let mut decoded = Vec::new();
+                decoded
+                    .try_reserve_exact(vector.len())
+                    .map_err(|error| ArrowError::ExternalError(Box::new(error)))?;
+                for value in values.chunks_exact(size_of::<T::Native>()) {
+                    decoded.push(T::Native::read(value).ok_or_else(|| {
+                        ArrowError::ComputeError("invalid primitive value".into())
+                    })?);
+                }
+                ScalarBuffer::from(decoded)
+            };
         let nulls = validity
             .map(|mask| {
                 let expected = vector.len().div_ceil(64).checked_mul(8).ok_or_else(|| {
-                    ArrowError::ComputeError("INTEGER validity size overflow".into())
+                    ArrowError::ComputeError("primitive validity size overflow".into())
                 })?;
                 if mask.len() != expected {
                     return Err(ArrowError::ComputeError(
-                        "INTEGER validity size differs from row count".into(),
+                        "primitive validity size differs from row count".into(),
                     ));
                 }
                 Ok(NullBuffer::new(BooleanBuffer::new(
@@ -119,7 +125,7 @@ fn integer_array(vector: &IntegerVector) -> Result<Int32Array, ArrowError> {
                 )))
             })
             .transpose()?;
-        return Int32Array::try_new(values, nulls);
+        return PrimitiveArray::<T>::try_new(values, nulls);
     }
 
     // Compressed values expand directly into their final Arrow allocation.
@@ -130,13 +136,13 @@ fn integer_array(vector: &IntegerVector) -> Result<Int32Array, ArrowError> {
         .map_err(|error| ArrowError::ExternalError(Box::new(error)))?;
     let mut validity: Option<Vec<u8>> = None;
     for index in 0..vector.len() {
-        let value = vector.get(index).ok_or_else(|| {
-            ArrowError::ComputeError("validated INTEGER vector has no value at row".into())
+        let value = vector.get::<T::Native>(index).ok_or_else(|| {
+            ArrowError::ComputeError("validated primitive vector has no value at row".into())
         })?;
         match value {
             Some(value) => values.push(value),
             None => {
-                values.push(0);
+                values.push(T::Native::default());
                 if validity.is_none() {
                     let mut mask = Vec::new();
                     let len = vector.len().div_ceil(8);
@@ -153,7 +159,55 @@ fn integer_array(vector: &IntegerVector) -> Result<Int32Array, ArrowError> {
     }
     let nulls = validity
         .map(|mask| NullBuffer::new(BooleanBuffer::new(Buffer::from_vec(mask), 0, vector.len())));
-    Int32Array::try_new(values.into(), nulls)
+    PrimitiveArray::<T>::try_new(values.into(), nulls)
+}
+
+fn data_type(id: LogicalTypeId) -> Result<DataType, ArrowError> {
+    match id {
+        LogicalTypeId::Boolean => Ok(DataType::Boolean),
+        LogicalTypeId::TinyInt => Ok(DataType::Int8),
+        LogicalTypeId::SmallInt => Ok(DataType::Int16),
+        LogicalTypeId::Integer => Ok(DataType::Int32),
+        LogicalTypeId::BigInt => Ok(DataType::Int64),
+        LogicalTypeId::UTinyInt => Ok(DataType::UInt8),
+        LogicalTypeId::USmallInt => Ok(DataType::UInt16),
+        LogicalTypeId::UInteger => Ok(DataType::UInt32),
+        LogicalTypeId::UBigInt => Ok(DataType::UInt64),
+        LogicalTypeId::Float => Ok(DataType::Float32),
+        LogicalTypeId::Double => Ok(DataType::Float64),
+        _ => Err(ArrowError::NotYetImplemented(format!(
+            "unsupported result type {id:?}"
+        ))),
+    }
+}
+
+fn array(vector: &PrimitiveVector) -> Result<ArrayRef, ArrowError> {
+    match vector.logical_type() {
+        LogicalTypeId::Boolean => {
+            let mut builder = BooleanArray::builder(vector.len());
+            for index in 0..vector.len() {
+                builder.append_option(
+                    vector
+                        .get::<bool>(index)
+                        .ok_or_else(|| ArrowError::ComputeError("invalid BOOLEAN row".into()))?,
+                );
+            }
+            Ok(Arc::new(builder.finish()))
+        }
+        LogicalTypeId::TinyInt => Ok(Arc::new(numeric_array::<Int8Type>(vector)?)),
+        LogicalTypeId::SmallInt => Ok(Arc::new(numeric_array::<Int16Type>(vector)?)),
+        LogicalTypeId::Integer => Ok(Arc::new(numeric_array::<Int32Type>(vector)?)),
+        LogicalTypeId::BigInt => Ok(Arc::new(numeric_array::<Int64Type>(vector)?)),
+        LogicalTypeId::UTinyInt => Ok(Arc::new(numeric_array::<UInt8Type>(vector)?)),
+        LogicalTypeId::USmallInt => Ok(Arc::new(numeric_array::<UInt16Type>(vector)?)),
+        LogicalTypeId::UInteger => Ok(Arc::new(numeric_array::<UInt32Type>(vector)?)),
+        LogicalTypeId::UBigInt => Ok(Arc::new(numeric_array::<UInt64Type>(vector)?)),
+        LogicalTypeId::Float => Ok(Arc::new(numeric_array::<Float32Type>(vector)?)),
+        LogicalTypeId::Double => Ok(Arc::new(numeric_array::<Float64Type>(vector)?)),
+        id => Err(ArrowError::NotYetImplemented(format!(
+            "unsupported result type {id:?}"
+        ))),
+    }
 }
 
 #[cfg(test)]

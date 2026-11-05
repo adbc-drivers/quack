@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use arrow_array::Array;
+use arrow_array::{Array, Int32Array};
 use bytes::Bytes;
 use duckdb_wiredata::chunk::decode;
 
@@ -120,7 +120,7 @@ fn positioned(wire: Vec<u8>, aligned: bool) -> (Bytes, DataChunk) {
         storage.extend_from_slice(&wire);
         let owner = Bytes::from(storage);
         let (decoded, _) = decode(owner.slice(prefix..)).unwrap();
-        let IntegerEncoding::Flat { values, .. } = decoded.columns()[0].encoding() else {
+        let PrimitiveEncoding::Flat { values, .. } = decoded.columns()[0].encoding() else {
             panic!("flat required")
         };
         if (values.as_ptr().align_offset(4) == 0) == aligned {
@@ -134,7 +134,7 @@ fn positioned(wire: Vec<u8>, aligned: bool) -> (Bytes, DataChunk) {
 fn aligned_values_and_padded_validity_share_owner() {
     let mask = [5, 255, 255, 255, 255, 255, 255, 255];
     let (owner, decoded) = positioned(chunk(3, vec![flat(&[42, 0, -7], Some(&mask))]), true);
-    let IntegerEncoding::Flat { values, validity } = decoded.columns()[0].encoding() else {
+    let PrimitiveEncoding::Flat { values, validity } = decoded.columns()[0].encoding() else {
         panic!("flat required")
     };
     let values_ptr = values.as_ptr();
@@ -160,7 +160,7 @@ fn aligned_values_and_padded_validity_share_owner() {
 #[test]
 fn unaligned_values_materialize_but_validity_still_shared() {
     let (owner, decoded) = positioned(chunk(3, vec![flat(&[42, 0, -7], Some(&[5; 8]))]), false);
-    let IntegerEncoding::Flat { values, validity } = decoded.columns()[0].encoding() else {
+    let PrimitiveEncoding::Flat { values, validity } = decoded.columns()[0].encoding() else {
         panic!("flat required")
     };
     let values_ptr = values.as_ptr();
@@ -255,16 +255,153 @@ fn schema_validation_and_mismatch_are_errors() {
         id: LogicalTypeId::Integer,
         info: None,
     };
-    let boolean = LogicalType {
-        id: LogicalTypeId::Boolean,
+    let varchar = LogicalType {
+        id: LogicalTypeId::Varchar,
         info: None,
     };
     assert!(schema(std::slice::from_ref(&integer), &[]).is_err());
     assert!(matches!(
-        schema(&[boolean], &["a".into()]),
+        schema(&[varchar], &["a".into()]),
         Err(ArrowError::NotYetImplemented(_))
     ));
     assert!(schema(&[integer], &[WireString(vec![255])]).is_err());
     let (decoded, _) = decode(chunk(1, vec![flat(&[42], None)])).unwrap();
     assert!(record_batch(decoded, integer_schema(&[])).is_err());
+}
+
+fn typed_chunk(id: LogicalTypeId, rows: u32, vector: Vec<u8>) -> Vec<u8> {
+    let mut wire = chunk(rows, vec![vector]);
+    let index = wire
+        .windows(5)
+        .position(|v| v == [100, 0, 13, 255, 255])
+        .unwrap();
+    wire[index + 2] = id as u8;
+    wire
+}
+
+fn raw_flat(bytes: &[u8], validity: Option<&[u8]>) -> Vec<u8> {
+    let mut wire = field(100, [u8::from(validity.is_some())]);
+    if let Some(mask) = validity {
+        wire.extend(field(101, blob(mask)));
+    }
+    wire.extend(field(102, blob(bytes)));
+    wire
+}
+
+#[test]
+fn numeric_alignment_compression_and_bit_preservation() {
+    macro_rules! check {
+        ($native:ty, $arrow:ty, $id:ident, $bits:expr) => {{
+            let bytes = $bits.to_le_bytes();
+            let wire = typed_chunk(LogicalTypeId::$id, 1, raw_flat(&bytes, Some(&[1; 8])));
+            for prefix in 0..size_of::<$native>() {
+                let mut storage = vec![0; prefix];
+                storage.extend_from_slice(&wire);
+                let owner = Bytes::from(storage);
+                let (chunk, _) = decode(owner.slice(prefix..)).unwrap();
+                let PrimitiveEncoding::Flat { values, validity } = chunk.columns()[0].encoding()
+                else {
+                    panic!("flat")
+                };
+                let pointer = values.as_ptr();
+                let validity_pointer = validity.unwrap().as_ptr();
+                let array = numeric_array::<$arrow>(&chunk.columns()[0]).unwrap();
+                drop(chunk);
+                drop(owner);
+                assert_eq!(array.value(0).to_le_bytes(), bytes);
+                assert_eq!(
+                    array.nulls().unwrap().inner().inner().as_ptr(),
+                    validity_pointer
+                );
+                if cfg!(target_endian = "little")
+                    && pointer.align_offset(align_of::<$native>()) == 0
+                {
+                    assert_eq!(array.values().inner().as_ptr(), pointer);
+                } else {
+                    assert_ne!(array.values().inner().as_ptr(), pointer);
+                }
+            }
+            for vector in [
+                constant(raw_flat(&bytes, None)),
+                dictionary(&[0, 0, 0], 1, raw_flat(&bytes, None)),
+            ] {
+                let (chunk, _) = decode(typed_chunk(LogicalTypeId::$id, 3, vector)).unwrap();
+                let array = numeric_array::<$arrow>(&chunk.columns()[0]).unwrap();
+                for row in 0..3 {
+                    assert_eq!(array.value(row).to_le_bytes(), bytes);
+                }
+            }
+            let (chunk, _) = decode(typed_chunk(
+                LogicalTypeId::$id,
+                3,
+                constant(raw_flat(&bytes, Some(&[0; 8]))),
+            ))
+            .unwrap();
+            assert_eq!(
+                numeric_array::<$arrow>(&chunk.columns()[0])
+                    .unwrap()
+                    .null_count(),
+                3
+            );
+        }};
+    }
+    check!(i8, Int8Type, TinyInt, i8::MIN);
+    check!(i16, Int16Type, SmallInt, i16::MIN);
+    check!(i32, Int32Type, Integer, i32::MIN);
+    check!(i64, Int64Type, BigInt, i64::MIN);
+    check!(u8, UInt8Type, UTinyInt, u8::MAX);
+    check!(u16, UInt16Type, USmallInt, u16::MAX);
+    check!(u32, UInt32Type, UInteger, u32::MAX);
+    check!(u64, UInt64Type, UBigInt, u64::MAX);
+    check!(f32, Float32Type, Float, 0x7fc01234u32);
+    check!(f64, Float64Type, Double, 0x7ff8000000001234u64);
+}
+
+#[test]
+fn boolean_arrow_bitmap_boundaries_and_compression() {
+    let mut bytes = vec![1; 65];
+    bytes[0] = 0;
+    bytes[64] = 255;
+    let mut mask = [255; 16];
+    mask[8] = 254;
+    for vector in [
+        raw_flat(&bytes, Some(&mask)),
+        dictionary(
+            &(0..65).collect::<Vec<_>>(),
+            65,
+            raw_flat(&bytes, Some(&mask)),
+        ),
+    ] {
+        let (chunk, _) = decode(typed_chunk(LogicalTypeId::Boolean, 65, vector)).unwrap();
+        let array = array(&chunk.columns()[0]).unwrap();
+        let boolean = array.as_any().downcast_ref::<BooleanArray>().unwrap();
+        assert!(!boolean.value(0));
+        assert!(boolean.value(63));
+        assert!(boolean.is_null(64));
+        assert_eq!(boolean.null_count(), 1);
+    }
+    for (bytes, mask, nulls) in [([1], None, 0), ([255], Some([0; 8]), 65)] {
+        let (chunk, _) = decode(typed_chunk(
+            LogicalTypeId::Boolean,
+            65,
+            constant(raw_flat(&bytes, mask.as_ref().map(|m| m.as_slice()))),
+        ))
+        .unwrap();
+        let array = array(&chunk.columns()[0]).unwrap();
+        assert_eq!(array.null_count(), nulls);
+    }
+}
+
+#[test]
+fn same_width_schema_mismatch_is_rejected() {
+    let (chunk, _) = decode(typed_chunk(
+        LogicalTypeId::UInteger,
+        1,
+        raw_flat(&42u32.to_le_bytes(), None),
+    ))
+    .unwrap();
+    assert!(matches!(
+        record_batch(chunk, integer_schema(&["x"])),
+        Err(ArrowError::SchemaError(_))
+    ));
 }

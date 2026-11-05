@@ -92,9 +92,9 @@ fn chunk(rows: u32, columns: Vec<Vec<u8>>) -> Vec<u8> {
     bytes.extend([255, 255]);
     bytes
 }
-fn values(vector: &IntegerVector) -> Vec<Option<i32>> {
+fn values(vector: &PrimitiveVector) -> Vec<Option<i32>> {
     (0..vector.len())
-        .map(|index| vector.get(index).unwrap())
+        .map(|index| vector.get::<i32>(index).unwrap())
         .collect()
 }
 
@@ -116,8 +116,8 @@ fn flat_shared_buffers_and_prefix() {
         values(&decoded.columns()[0]),
         vec![Some(42), None, Some(-7)]
     );
-    assert_eq!(decoded.columns()[0].get(3), None);
-    let IntegerEncoding::Flat { values, validity } = decoded.columns()[0].encoding() else {
+    assert_eq!(decoded.columns()[0].get::<i32>(3), None);
+    let PrimitiveEncoding::Flat { values, validity } = decoded.columns()[0].encoding() else {
         panic!("expected flat")
     };
     let start = input.as_ptr() as usize;
@@ -148,15 +148,15 @@ fn compressed_vectors_remain_compressed() {
     .unwrap();
     assert!(matches!(
         decoded.columns()[0].encoding(),
-        IntegerEncoding::Constant { .. }
+        PrimitiveEncoding::Constant { .. }
     ));
     assert!(matches!(
         decoded.columns()[2].encoding(),
-        IntegerEncoding::Dictionary { .. }
+        PrimitiveEncoding::Dictionary { .. }
     ));
     assert!(matches!(
         decoded.columns()[3].encoding(),
-        IntegerEncoding::Sequence { .. }
+        PrimitiveEncoding::Sequence { .. }
     ));
     assert_eq!(values(&decoded.columns()[0]), vec![Some(42); 4]);
     assert_eq!(values(&decoded.columns()[1]), vec![None; 4]);
@@ -186,7 +186,7 @@ fn nested_dictionary_constant_and_empty() {
     ] {
         let (decoded, _) = decode(chunk(0, vec![vector])).unwrap();
         assert!(decoded.columns()[0].is_empty());
-        assert_eq!(decoded.columns()[0].get(0), None);
+        assert_eq!(decoded.columns()[0].get::<i32>(0), None);
     }
 }
 
@@ -195,15 +195,18 @@ fn validity_word_boundary_and_padding() {
     let mut mask = [255; 16];
     mask[8] = 254;
     let (decoded, _) = decode(chunk(65, vec![flat(&[42; 65], Some(&mask))])).unwrap();
-    assert_eq!(decoded.columns()[0].get(63), Some(Some(42)));
-    assert_eq!(decoded.columns()[0].get(64), Some(None));
+    assert_eq!(decoded.columns()[0].get::<i32>(63), Some(Some(42)));
+    assert_eq!(decoded.columns()[0].get::<i32>(64), Some(None));
 }
 
 #[test]
 fn huge_constant_has_no_row_allocation() {
     let (decoded, _) = decode(chunk(u32::MAX, vec![constant(flat(&[42], None))])).unwrap();
     assert_eq!(decoded.rows(), u32::MAX as usize);
-    assert_eq!(decoded.columns()[0].get(decoded.rows() - 1), Some(Some(42)));
+    assert_eq!(
+        decoded.columns()[0].get::<i32>(decoded.rows() - 1),
+        Some(Some(42))
+    );
 }
 
 #[test]
@@ -245,7 +248,7 @@ fn unsupported_is_distinct() {
         .windows(5)
         .position(|v| v == [100, 0, 13, 255, 255])
         .unwrap();
-    wire[index + 2] = 10;
+    wire[index + 2] = 25;
     assert_eq!(decode(wire).unwrap_err().kind, DecodeErrorKind::Unsupported);
 }
 
@@ -307,5 +310,196 @@ fn captured_bare_chunks() {
             offset += consumed;
         }
         assert_eq!(actual, expected);
+    }
+}
+
+fn typed_chunk(id: LogicalTypeId, rows: u32, vector: Vec<u8>) -> Vec<u8> {
+    let mut wire = chunk(rows, vec![vector]);
+    let index = wire
+        .windows(5)
+        .position(|v| v == [100, 0, 13, 255, 255])
+        .unwrap();
+    wire[index + 2] = id as u8;
+    wire
+}
+
+fn raw_flat(bytes: &[u8], validity: Option<&[u8]>) -> Vec<u8> {
+    let mut wire = field(100, [u8::from(validity.is_some())]);
+    if let Some(mask) = validity {
+        wire.extend(field(101, blob(mask)));
+    }
+    wire.extend(field(102, blob(bytes)));
+    wire
+}
+
+#[test]
+fn primitive_widths_compression_and_truncations() {
+    macro_rules! check {
+        ($native:ty, $id:ident, $value:expr) => {{
+            let value: $native = $value;
+            let bytes = value.to_le_bytes();
+            for (rows, vector) in [
+                (1, raw_flat(&bytes, None)),
+                (3, constant(raw_flat(&bytes, None))),
+                (3, dictionary(&[0, 0, 0], 1, raw_flat(&bytes, None))),
+                (
+                    3,
+                    dictionary(&[0, 1, 0], 2, constant(raw_flat(&bytes, None))),
+                ),
+            ] {
+                let wire = typed_chunk(LogicalTypeId::$id, rows, vector);
+                let (decoded, _) = decode(wire.clone()).unwrap();
+                for row in 0..rows as usize {
+                    assert_eq!(decoded.columns()[0].get::<$native>(row), Some(Some(value)));
+                }
+                assert_eq!(decoded.columns()[0].get::<$native>(rows as usize), None);
+                for end in 0..wire.len() {
+                    assert!(decode(wire[..end].to_vec()).is_err());
+                }
+            }
+            let (decoded, _) = decode(typed_chunk(
+                LogicalTypeId::$id,
+                3,
+                constant(raw_flat(&bytes, Some(&[0; 8]))),
+            ))
+            .unwrap();
+            assert_eq!(decoded.columns()[0].get::<$native>(2), Some(None));
+            assert!(decode(typed_chunk(LogicalTypeId::$id, 2, raw_flat(&bytes, None))).is_err());
+        }};
+    }
+    check!(i8, TinyInt, i8::MIN);
+    check!(i16, SmallInt, i16::MIN);
+    check!(i32, Integer, i32::MIN);
+    check!(i64, BigInt, i64::MIN);
+    check!(u8, UTinyInt, u8::MAX);
+    check!(u16, USmallInt, u16::MAX);
+    check!(u32, UInteger, u32::MAX);
+    check!(u64, UBigInt, u64::MAX);
+    check!(f32, Float, f32::INFINITY);
+    check!(f64, Double, f64::NEG_INFINITY);
+}
+
+#[test]
+fn primitive_sequences_check_destination_range() {
+    macro_rules! check {
+        ($native:ty, $id:ident) => {{
+            let (decoded, _) = decode(typed_chunk(LogicalTypeId::$id, 3, sequence(3, -1))).unwrap();
+            assert_eq!(decoded.columns()[0].get::<$native>(2), Some(Some(1)));
+            for (start, step) in [(<$native>::MIN as i64, -1), (<$native>::MAX as i64, 1)] {
+                assert!(decode(typed_chunk(LogicalTypeId::$id, 2, sequence(start, step))).is_err());
+            }
+        }};
+    }
+    check!(i8, TinyInt);
+    check!(i16, SmallInt);
+    check!(i32, Integer);
+    check!(i64, BigInt);
+    check!(u8, UTinyInt);
+    check!(u16, USmallInt);
+    check!(u32, UInteger);
+    let (decoded, _) = decode(typed_chunk(
+        LogicalTypeId::UBigInt,
+        3,
+        sequence(i64::MAX, 1),
+    ))
+    .unwrap();
+    assert_eq!(
+        decoded.columns()[0].get::<u64>(2),
+        Some(Some(i64::MAX as u64 + 2))
+    );
+    for vector in [sequence(-1, 0), sequence(i64::MAX, i64::MAX)] {
+        assert!(decode(typed_chunk(LogicalTypeId::UBigInt, 3, vector)).is_err());
+    }
+    for id in [
+        LogicalTypeId::Boolean,
+        LogicalTypeId::Float,
+        LogicalTypeId::Double,
+    ] {
+        assert_eq!(
+            decode(typed_chunk(id, 0, sequence(0, 1))).unwrap_err().kind,
+            DecodeErrorKind::Unsupported
+        );
+    }
+}
+
+#[test]
+fn boolean_validity_compression_and_invalid_payloads() {
+    let (decoded, _) = decode(typed_chunk(
+        LogicalTypeId::Boolean,
+        3,
+        raw_flat(&[0, 255, 1], Some(&[5; 8])),
+    ))
+    .unwrap();
+    assert_eq!(decoded.columns()[0].get::<bool>(0), Some(Some(false)));
+    assert_eq!(decoded.columns()[0].get::<bool>(1), Some(None));
+    assert_eq!(decoded.columns()[0].get::<bool>(2), Some(Some(true)));
+    assert_eq!(decoded.columns()[0].get::<u8>(0), None);
+    for vector in [
+        raw_flat(&[2], None),
+        constant(raw_flat(&[255], None)),
+        dictionary(&[0], 1, raw_flat(&[2], None)),
+    ] {
+        assert_eq!(
+            decode(typed_chunk(LogicalTypeId::Boolean, 1, vector))
+                .unwrap_err()
+                .kind,
+            DecodeErrorKind::Malformed
+        );
+    }
+    let (decoded, _) = decode(typed_chunk(
+        LogicalTypeId::Boolean,
+        3,
+        dictionary(&[1, 0, 1], 2, raw_flat(&[0, 1], None)),
+    ))
+    .unwrap();
+    assert_eq!(decoded.columns()[0].get::<bool>(0), Some(Some(true)));
+    assert_eq!(decoded.columns()[0].get::<bool>(1), Some(Some(false)));
+    let (decoded, _) = decode(typed_chunk(
+        LogicalTypeId::Boolean,
+        65,
+        constant(raw_flat(&[1], None)),
+    ))
+    .unwrap();
+    assert_eq!(decoded.columns()[0].get::<bool>(64), Some(Some(true)));
+}
+
+#[test]
+fn float_payload_bits_survive_views() {
+    for bits in [0x80000000u32, 0x7fc01234, 1, 0x7f7fffff] {
+        let (decoded, _) = decode(typed_chunk(
+            LogicalTypeId::Float,
+            1,
+            raw_flat(&bits.to_le_bytes(), None),
+        ))
+        .unwrap();
+        assert_eq!(
+            decoded.columns()[0]
+                .get::<f32>(0)
+                .unwrap()
+                .unwrap()
+                .to_bits(),
+            bits
+        );
+    }
+    for bits in [
+        0x8000000000000000u64,
+        0x7ff8000000001234,
+        1,
+        0x7fefffffffffffff,
+    ] {
+        let (decoded, _) = decode(typed_chunk(
+            LogicalTypeId::Double,
+            1,
+            raw_flat(&bits.to_le_bytes(), None),
+        ))
+        .unwrap();
+        assert_eq!(
+            decoded.columns()[0]
+                .get::<f64>(0)
+                .unwrap()
+                .unwrap()
+                .to_bits(),
+            bits
+        );
     }
 }
