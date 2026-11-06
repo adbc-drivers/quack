@@ -24,10 +24,16 @@ crate-type = ["lib", "cdylib"]
 [dependencies]
 adbc_core = "0.25"
 adbc_ffi = "0.25"
-arrow-array = "60"
+arrow-array = { version = "60", features = ["ffi"] }
+arrow-buffer = "60"
 arrow-schema = "60"
+duckdb-wiredata = { path = "../duckdb-wiredata" }
 driverbase = { git = "https://github.com/adbc-drivers/driverbase-rs.git", rev = "9e9e4b2fdc1c9dce3f1a68a676f458428dd96152" }
 quack-protocol = { path = "../quack-protocol" }
 quack-tokio = { path = "../quack-tokio" }
 tokio = { version = "1", features = ["rt-multi-thread", "time", "net"] }
 url = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+bytes = "1"

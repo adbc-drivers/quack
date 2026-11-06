@@ -14,6 +14,7 @@
 
 //! DuckDB V2_0_0 little-endian data descriptors. No transport dependencies.
 
+pub mod chunk;
 pub mod decode;
 pub mod logical_type;
 

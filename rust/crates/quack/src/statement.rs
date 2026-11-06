@@ -12,15 +12,93 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::error::ErrorHelper;
+use crate::{
+    connection::Session,
+    conversion,
+    error::{ErrorHelper, query_error},
+};
 use adbc_core::error::Result;
 use adbc_core::options::{OptionStatement, OptionValue};
 use adbc_core::{Optionable, PartitionedResult, Statement};
 use arrow_array::{RecordBatch, RecordBatchReader};
-use arrow_schema::Schema;
+use arrow_schema::{ArrowError, Schema, SchemaRef};
 use driverbase::error::ErrorHelper as _;
+use std::sync::Arc;
 
-pub struct QuackStatement {}
+const INLINE_ROWS: &str = "quack.inline_rows";
+
+pub struct QuackStatement {
+    session: Arc<Session>,
+    sql: Option<String>,
+    inline_rows: Option<i64>,
+}
+
+impl QuackStatement {
+    pub(crate) fn new(session: Arc<Session>) -> Self {
+        Self {
+            session,
+            sql: None,
+            inline_rows: None,
+        }
+    }
+}
+
+fn query_uuid() -> quack_protocol::message::HugeInt {
+    let (upper, lower) = uuid::Uuid::new_v4().as_u64_pair();
+    quack_protocol::message::HugeInt {
+        upper: (upper ^ (1u64 << 63)) as i64,
+        lower,
+    }
+}
+
+struct QueryReader {
+    query: Option<quack_tokio::Query>,
+    schema: SchemaRef,
+    session: Arc<Session>,
+}
+
+impl QueryReader {
+    fn finish(&mut self) {
+        let _entered = self.session.runtime.enter();
+        drop(self.query.take());
+    }
+}
+
+impl Drop for QueryReader {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+
+impl Iterator for QueryReader {
+    type Item = std::result::Result<RecordBatch, ArrowError>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let query = self.query.as_mut()?;
+        match self.session.runtime.block_on(query.next_chunk()) {
+            Ok(Some(chunk)) => {
+                let result = conversion::record_batch(chunk, Arc::clone(&self.schema));
+                if result.is_err() {
+                    self.finish();
+                }
+                Some(result)
+            }
+            Ok(None) => {
+                self.finish();
+                None
+            }
+            Err(error) => {
+                self.finish();
+                Some(Err(ArrowError::ExternalError(error)))
+            }
+        }
+    }
+}
+
+impl RecordBatchReader for QueryReader {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
 
 impl Statement for QuackStatement {
     fn bind(&mut self, _batch: RecordBatch) -> Result<()> {
@@ -36,9 +114,42 @@ impl Statement for QuackStatement {
     }
 
     fn execute(&mut self) -> Result<Box<dyn RecordBatchReader + Send>> {
-        Err(ErrorHelper::not_implemented()
-            .message("execute not implemented")
-            .to_adbc())
+        let sql = self.sql.as_ref().ok_or_else(|| {
+            ErrorHelper::invalid_state()
+                .message("SQL query is required")
+                .to_adbc()
+        })?;
+        let mut connection = self.session.connection()?;
+        let query = self
+            .session
+            .runtime
+            .block_on(connection.execute(quack_protocol::state::QueryParams {
+                query: sql.clone().into(),
+                uuid: query_uuid(),
+                inline_rows: self.inline_rows.map(|value| value as u64),
+            }))
+            .map_err(|error| query_error(error.as_ref()))?;
+        drop(connection);
+        let schema = match conversion::schema(query.result_types(), query.result_names()) {
+            Ok(schema) => schema,
+            Err(error) => {
+                let _entered = self.session.runtime.enter();
+                drop(query);
+                let helper = match error {
+                    ArrowError::NotYetImplemented(_) => ErrorHelper::not_implemented(),
+                    _ => ErrorHelper::invalid_data(),
+                };
+                return Err(helper
+                    .context("read Quack result schema")
+                    .message(error.to_string())
+                    .to_adbc());
+            }
+        };
+        Ok(Box::new(QueryReader {
+            query: Some(query),
+            schema,
+            session: Arc::clone(&self.session),
+        }))
     }
 
     fn execute_update(&mut self) -> Result<Option<i64>> {
@@ -71,10 +182,9 @@ impl Statement for QuackStatement {
             .to_adbc())
     }
 
-    fn set_sql_query(&mut self, _query: impl AsRef<str>) -> Result<()> {
-        Err(ErrorHelper::not_implemented()
-            .message("set_sql_query not implemented")
-            .to_adbc())
+    fn set_sql_query(&mut self, query: impl AsRef<str>) -> Result<()> {
+        self.sql = Some(query.as_ref().to_owned());
+        Ok(())
     }
 
     fn set_substrait_plan(&mut self, _plan: impl AsRef<[u8]>) -> Result<()> {
@@ -93,8 +203,21 @@ impl Statement for QuackStatement {
 impl Optionable for QuackStatement {
     type Option = OptionStatement;
 
-    fn set_option(&mut self, key: Self::Option, _value: OptionValue) -> Result<()> {
-        Err(ErrorHelper::set_unknown_option(&key).to_adbc())
+    fn set_option(&mut self, key: Self::Option, value: OptionValue) -> Result<()> {
+        match (&key, value) {
+            (OptionStatement::Other(name), OptionValue::Int(value))
+                if name == INLINE_ROWS && value >= 0 =>
+            {
+                self.inline_rows = Some(value);
+                Ok(())
+            }
+            (OptionStatement::Other(name), _) if name == INLINE_ROWS => {
+                Err(ErrorHelper::invalid_argument()
+                    .message("quack.inline_rows must be a nonnegative integer")
+                    .to_adbc())
+            }
+            _ => Err(ErrorHelper::set_unknown_option(&key).to_adbc()),
+        }
     }
 
     fn get_option_string(&self, key: Self::Option) -> Result<String> {
@@ -106,10 +229,22 @@ impl Optionable for QuackStatement {
     }
 
     fn get_option_int(&self, key: Self::Option) -> Result<i64> {
-        Err(ErrorHelper::get_unknown_option(&key).to_adbc())
+        match &key {
+            OptionStatement::Other(name) if name == INLINE_ROWS => {
+                self.inline_rows.ok_or_else(|| {
+                    ErrorHelper::invalid_state()
+                        .message("quack.inline_rows is unset (server default)")
+                        .to_adbc()
+                })
+            }
+            _ => Err(ErrorHelper::get_unknown_option(&key).to_adbc()),
+        }
     }
 
     fn get_option_double(&self, key: Self::Option) -> Result<f64> {
         Err(ErrorHelper::get_unknown_option(&key).to_adbc())
     }
 }
+
+#[cfg(test)]
+mod tests;

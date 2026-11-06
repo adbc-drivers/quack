@@ -380,6 +380,62 @@ fn opaque_equality_compares_visible_bytes() {
 }
 
 #[test]
+fn opaque_payloads_share_bytes_input_and_outlive_the_message() {
+    for (expected, wire) in fixtures() {
+        if payload(&expected).is_empty() {
+            continue;
+        }
+        let input = bytes::Bytes::from(wire);
+        let offset = input.len() - payload(&expected).len();
+        let original = input.as_ptr().wrapping_add(offset);
+        let decoded = decode(input.clone()).unwrap();
+        assert_eq!(payload(&decoded).as_ptr(), original);
+        let shared = match &decoded.body {
+            MessageBody::PrepareResponse(v) => v.body().bytes().clone(),
+            MessageBody::FetchResponse(v) => v.payload.bytes().clone(),
+            MessageBody::SendDataRequest(v) => v.payload.bytes().clone(),
+            _ => unreachable!(),
+        };
+        drop(decoded);
+        drop(input);
+        assert_eq!(shared.as_ptr(), original);
+        assert_eq!(shared.as_ref(), payload(&expected));
+    }
+}
+
+#[test]
+fn opaque_construction_transfers_or_shares_ownership() {
+    let input = vec![1, 2, 3, 4];
+    let original = input.as_ptr();
+    let opaque = OpaqueBytes::new(input);
+    assert_eq!(opaque.as_bytes().as_ptr(), original);
+    let bytes = opaque.into_bytes();
+    let sliced = OpaqueBytes::from(bytes.slice(1..3));
+    drop(bytes);
+    assert_eq!(sliced.as_bytes().as_ptr(), original.wrapping_add(1));
+    assert_eq!(sliced.as_bytes(), &[2, 3]);
+}
+
+#[test]
+fn consuming_encoding_moves_prefix_without_payload() {
+    let request = message(MessageBody::HeartbeatRequest(HeartbeatRequest));
+    let encoded = encode(&request).unwrap();
+    assert!(encoded.payload.is_empty());
+    let original = encoded.prefix.as_ptr();
+    let expected = encoded.to_vec();
+    let bytes = encoded.into_vec();
+    assert_eq!(bytes.as_ptr(), original);
+    assert_eq!(bytes, expected);
+}
+
+#[test]
+fn consuming_encoding_appends_payload() {
+    for (message, expected) in fixtures() {
+        assert_eq!(encode(&message).unwrap().into_vec(), expected);
+    }
+}
+
+#[test]
 fn all_truncations_of_fully_parsed_messages_fail() {
     for (expected, bytes) in fixtures() {
         if !payload(&expected).is_empty() {
@@ -541,7 +597,11 @@ fn prepare_defaults_and_rejected_results() {
     }
     let error = decode(wire(4, "04 00 01")).unwrap_err();
     assert_eq!(error.context, "PrepareResponse.results");
-    assert!(error.message.contains("nonempty inline results"));
+    assert!(
+        error
+            .message
+            .contains("chunk count exceeds remaining input")
+    );
 }
 
 #[test]

@@ -61,10 +61,10 @@ Put Tokio integration tests under `crates/quack-tokio/tests`.
 Read `QUACK_HTTP_ENDPOINT` from the environment. Return early only if it is
 absent; malformed values or connection failures must fail configured tests.
 
-Use the fixture in `../compose.yaml`. From this directory:
+Use the fixture in `../cpp/compose.yaml`. From this directory:
 
 ```bash
-docker compose -f ../compose.yaml up -d --wait test-service
+docker compose -f ../cpp/compose.yaml up -d --wait test-service
 QUACK_HTTP_ENDPOINT=http://localhost:9494/quack cargo test -p quack-tokio --test connection
 ```
 

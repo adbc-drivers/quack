@@ -19,4 +19,5 @@ edition = "2024"
 license.workspace = true
 
 [dependencies]
+bytes = "1"
 duckdb-wiredata = { path = "../duckdb-wiredata" }

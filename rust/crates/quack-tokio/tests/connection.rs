@@ -53,8 +53,8 @@ async fn query_initial_response() -> Result<(), Error> {
     })
     .await?;
     let uuid = quack_protocol::message::HugeInt { upper: 0, lower: 1 };
-    let response = connection
-        .prepare(state::QueryParams {
+    let mut response = connection
+        .execute(state::QueryParams {
             query: "SELECT CAST(42 AS INTEGER) AS answer".into(),
             uuid,
             inline_rows: Some(0),
@@ -67,5 +67,51 @@ async fn query_initial_response() -> Result<(), Error> {
     );
     assert_eq!(response.result_names(), &["answer".into()]);
     assert_eq!(response.query_uuid(), uuid);
+    let chunk = response.next_chunk().await?.ok_or("missing result chunk")?;
+    assert_eq!(chunk.rows(), 1);
+    assert_eq!(chunk.columns()[0].get(0), Some(Some(42)));
+    assert!(response.next_chunk().await?.is_none());
+    for (index, inline_rows) in [None, Some(0), Some(1)].into_iter().enumerate() {
+        let mut query = connection
+            .execute(state::QueryParams {
+                query: "SELECT 42".into(),
+                uuid: quack_protocol::message::HugeInt {
+                    upper: 0,
+                    lower: 2 + index as u64,
+                },
+                inline_rows,
+            })
+            .await?;
+        assert_eq!(query.result_names(), &["42".into()]);
+        let chunk = query.next_chunk().await?.ok_or("missing result chunk")?;
+        assert_eq!(chunk.columns()[0].get(0), Some(Some(42)));
+        assert!(query.next_chunk().await?.is_none());
+    }
+    for (index, sql, expected) in [
+        ("SELECT NULL::INTEGER AS answer", vec![None]),
+        ("SELECT 42::INTEGER AS answer WHERE false", vec![]),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (sql, expected))| (index, sql, expected))
+    {
+        let mut query = connection
+            .execute(state::QueryParams {
+                query: sql.into(),
+                uuid: quack_protocol::message::HugeInt {
+                    upper: 0,
+                    lower: 10 + index as u64,
+                },
+                inline_rows: None,
+            })
+            .await?;
+        let mut values = Vec::new();
+        while let Some(chunk) = query.next_chunk().await? {
+            for row in 0..chunk.rows() {
+                values.push(chunk.columns()[0].get(row).ok_or("row out of bounds")?);
+            }
+        }
+        assert_eq!(values, expected);
+    }
     connection.disconnect().await
 }

@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ops::Range;
+use bytes::Bytes;
+use duckdb_wiredata::chunk::DataChunk;
 
 /// A wire string is bytes, not necessarily UTF-8.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -48,27 +49,37 @@ impl From<Vec<u8>> for WireString {
 
 /// An independently owned view into an allocation. Intentionally not Clone.
 ///
-/// The unused prefix/capacity remains allocated until this value is dropped.
+/// Slices retain the underlying allocation until its last owner is dropped.
 #[derive(Default)]
 pub struct OpaqueBytes {
-    buffer: Vec<u8>,
-    range: Range<usize>,
+    buffer: Bytes,
 }
 
 impl OpaqueBytes {
     /// Take ownership of a complete opaque body or appended chunk payload.
-    pub fn new(buffer: Vec<u8>) -> Self {
-        let range = 0..buffer.len();
-        Self { buffer, range }
+    pub fn new(buffer: impl Into<Bytes>) -> Self {
+        Self {
+            buffer: buffer.into(),
+        }
     }
 
     pub fn as_bytes(&self) -> &[u8] {
-        &self.buffer[self.range.clone()]
+        &self.buffer
     }
 
-    pub(crate) fn tail(buffer: Vec<u8>, start: usize) -> Self {
-        let range = start..buffer.len();
-        Self { buffer, range }
+    /// Share the visible bytes without copying their contents.
+    pub fn bytes(&self) -> &Bytes {
+        &self.buffer
+    }
+
+    pub fn into_bytes(self) -> Bytes {
+        self.buffer
+    }
+
+    pub(crate) fn tail(buffer: Bytes, start: usize) -> Self {
+        Self {
+            buffer: buffer.slice(start..),
+        }
     }
 }
 
@@ -78,10 +89,16 @@ impl From<Vec<u8>> for OpaqueBytes {
     }
 }
 
+impl From<Bytes> for OpaqueBytes {
+    fn from(buffer: Bytes) -> Self {
+        Self::new(buffer)
+    }
+}
+
 impl std::fmt::Debug for OpaqueBytes {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OpaqueBytes")
-            .field("len", &self.range.len())
+            .field("len", &self.buffer.len())
             .finish_non_exhaustive()
     }
 }
@@ -172,6 +189,16 @@ pub struct PrepareRequest {
     pub inline_rows: Option<u64>,
 }
 
+/// Owned PREPARE metadata and decoded chunk views.
+#[derive(Debug, PartialEq, Eq)]
+pub struct PrepareResponseParts {
+    pub result_types: Vec<duckdb_wiredata::logical_type::LogicalType>,
+    pub result_names: Vec<WireString>,
+    pub needs_more_fetch: bool,
+    pub query_uuid: HugeInt,
+    pub results: Vec<DataChunk>,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct PrepareResponse {
     body: OpaqueBytes,
@@ -179,20 +206,27 @@ pub struct PrepareResponse {
     result_names: Vec<WireString>,
     needs_more_fetch: bool,
     query_uuid: HugeInt,
+    results: Vec<duckdb_wiredata::chunk::DataChunk>,
 }
 
 impl PrepareResponse {
-    /// Validate and decode a complete body. Nonempty inline results are unsupported.
+    /// Validate and decode a complete body, including inline chunk views.
     /// Error offsets are relative to the beginning of this body.
     pub fn from_body(body: OpaqueBytes) -> Result<Self, crate::codec::DecodeError> {
-        let (result_types, result_names, needs_more_fetch, query_uuid) =
-            crate::codec::decode_prepare_body(body.as_bytes())?;
+        let PrepareResponseParts {
+            result_types,
+            result_names,
+            needs_more_fetch,
+            query_uuid,
+            results,
+        } = crate::codec::decode_prepare_body(body.bytes())?;
         Ok(Self {
             body,
             result_types,
             result_names,
             needs_more_fetch,
             query_uuid,
+            results,
         })
     }
 
@@ -207,6 +241,25 @@ impl PrepareResponse {
     }
     pub fn query_uuid(&self) -> HugeInt {
         self.query_uuid
+    }
+    pub fn results(&self) -> &[duckdb_wiredata::chunk::DataChunk] {
+        &self.results
+    }
+    /// Move schema and decoded chunks out without cloning them or their buffers.
+    pub fn into_parts(self) -> PrepareResponseParts {
+        PrepareResponseParts {
+            result_types: self.result_types,
+            result_names: self.result_names,
+            needs_more_fetch: self.needs_more_fetch,
+            query_uuid: self.query_uuid,
+            results: self.results,
+        }
+    }
+    pub fn validate_chunk(
+        &self,
+        chunk: &duckdb_wiredata::chunk::DataChunk,
+    ) -> Result<(), crate::codec::DecodeError> {
+        crate::codec::validate_chunk_schema(&self.result_types, chunk)
     }
     /// Original validated body, retained for byte-preserving re-encoding.
     pub fn body(&self) -> &OpaqueBytes {
@@ -231,6 +284,16 @@ pub struct FetchResponse {
     pub total_batches: Option<u64>,
     pub batch_index: Option<u64>,
     pub payload: OpaqueBytes,
+}
+
+impl FetchResponse {
+    /// Decode exactly the declared bare chunks, sharing this payload's allocation.
+    /// Error offsets are relative to the beginning of the payload.
+    pub fn decode_chunks(
+        &self,
+    ) -> Result<Vec<duckdb_wiredata::chunk::DataChunk>, crate::codec::DecodeError> {
+        crate::codec::decode_fetch_chunks(self.payload.bytes(), self.chunk_count)
+    }
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]

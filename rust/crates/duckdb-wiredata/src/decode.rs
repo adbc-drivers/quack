@@ -16,8 +16,15 @@
 
 use crate::logical_type::{LogicalType, LogicalTypeId, TypeInfo, TypeInfoKind};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecodeErrorKind {
+    Malformed,
+    Unsupported,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct DecodeError {
+    pub kind: DecodeErrorKind,
     pub offset: usize,
     pub context: &'static str,
     pub message: String,
@@ -46,20 +53,27 @@ pub fn logical_type(bytes: &[u8]) -> Result<(LogicalType, usize), DecodeError> {
     Ok((value, reader.pos))
 }
 
-struct Reader<'a> {
-    bytes: &'a [u8],
-    pos: usize,
-    context: &'static str,
+pub(crate) struct Reader<'a> {
+    pub(crate) bytes: &'a [u8],
+    pub(crate) pos: usize,
+    pub(crate) context: &'static str,
 }
 impl Reader<'_> {
-    fn error(&self, message: impl Into<String>) -> DecodeError {
+    pub(crate) fn error(&self, message: impl Into<String>) -> DecodeError {
         DecodeError {
+            kind: DecodeErrorKind::Malformed,
             offset: self.pos,
             context: self.context,
             message: message.into(),
         }
     }
-    fn take(&mut self, len: usize) -> Result<&[u8], DecodeError> {
+    pub(crate) fn unsupported(&self, message: impl Into<String>) -> DecodeError {
+        DecodeError {
+            kind: DecodeErrorKind::Unsupported,
+            ..self.error(message)
+        }
+    }
+    pub(crate) fn take(&mut self, len: usize) -> Result<&[u8], DecodeError> {
         let end = self
             .pos
             .checked_add(len)
@@ -79,7 +93,7 @@ impl Reader<'_> {
             .ok_or_else(|| self.error("truncated field ID"))?;
         Ok(u16::from_le_bytes(*pair))
     }
-    fn field(
+    pub(crate) fn field(
         &mut self,
         id: u16,
         context: &'static str,
@@ -96,11 +110,11 @@ impl Reader<'_> {
             Ok(false)
         }
     }
-    fn end(&mut self) -> Result<(), DecodeError> {
+    pub(crate) fn end(&mut self) -> Result<(), DecodeError> {
         self.field(u16::MAX, self.context, true)?;
         Ok(())
     }
-    fn uint(&mut self, width: u32) -> Result<u64, DecodeError> {
+    pub(crate) fn uint(&mut self, width: u32) -> Result<u64, DecodeError> {
         let mut value = 0u128;
         for index in 0..width.div_ceil(7) {
             let byte = self.take(1)?[0];
@@ -114,7 +128,7 @@ impl Reader<'_> {
         }
         Err(self.error("unsigned LEB128 exceeds encoded width"))
     }
-    fn boolean(&mut self) -> Result<bool, DecodeError> {
+    pub(crate) fn boolean(&mut self) -> Result<bool, DecodeError> {
         match self.take(1)?[0] {
             0 => Ok(false),
             1 => Ok(true),
@@ -126,7 +140,7 @@ impl Reader<'_> {
             usize::try_from(self.uint(32)?).map_err(|_| self.error("string length overflow"))?;
         Ok(self.take(len)?.to_vec())
     }
-    fn count(&mut self, minimum: usize) -> Result<usize, DecodeError> {
+    pub(crate) fn count(&mut self, minimum: usize) -> Result<usize, DecodeError> {
         let count = usize::try_from(self.uint(64)?).map_err(|_| self.error("count overflow"))?;
         if count > (self.bytes.len() - self.pos) / minimum {
             return Err(self.error("count exceeds remaining input"));
@@ -154,11 +168,11 @@ impl Reader<'_> {
     }
     fn empty_values(&mut self, id: u16, context: &'static str) -> Result<(), DecodeError> {
         if self.field(id, context, false)? && self.uint(64)? != 0 {
-            return Err(self.error("unsupported Value-bearing metadata"));
+            return Err(self.unsupported("unsupported Value-bearing metadata"));
         }
         Ok(())
     }
-    fn logical_type(&mut self, depth: usize) -> Result<LogicalType, DecodeError> {
+    pub(crate) fn logical_type(&mut self, depth: usize) -> Result<LogicalType, DecodeError> {
         self.context = "LogicalType";
         if depth >= 64 {
             return Err(self.error("type nesting exceeds 64"));
@@ -166,7 +180,7 @@ impl Reader<'_> {
         self.field(100, "LogicalType.id", true)?;
         let id = self.uint(8)? as u8;
         let id = LogicalTypeId::try_from(id)
-            .map_err(|id| self.error(format!("unsupported logical type ID {id}")))?;
+            .map_err(|id| self.unsupported(format!("unsupported logical type ID {id}")))?;
         let info = if self.field(101, "LogicalType.type_info", false)? && self.boolean()? {
             Some(self.type_info(depth)?)
         } else {
@@ -255,9 +269,11 @@ impl Reader<'_> {
                 self.end()?;
                 TypeInfoKind::Geometry { crs }
             }
-            7 => return Err(self.error("unsupported parsed-expression type metadata")),
-            11 => return Err(self.error("unsupported Value-bearing INTEGER_LITERAL metadata")),
-            _ => return Err(self.error(format!("unsupported type-info discriminator {tag}"))),
+            7 => return Err(self.unsupported("unsupported parsed-expression type metadata")),
+            11 => {
+                return Err(self.unsupported("unsupported Value-bearing INTEGER_LITERAL metadata"));
+            }
+            _ => return Err(self.unsupported(format!("unsupported type-info discriminator {tag}"))),
         };
         self.context = "TypeInfo";
         self.end()?;
