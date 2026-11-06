@@ -137,6 +137,7 @@ impl Database for QuackDatabase {
                     .to_adbc()
             })?;
         Ok(QuackConnection {
+            manual: false,
             session: std::sync::Arc::new(Session {
                 connection: std::sync::Mutex::new(connection),
                 runtime,

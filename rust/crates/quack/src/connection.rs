@@ -48,6 +48,7 @@ impl Drop for Session {
 }
 
 pub struct QuackConnection {
+    pub(crate) manual: bool,
     pub(crate) session: std::sync::Arc<Session>,
 }
 
@@ -113,6 +114,22 @@ impl QuackConnection {
             error
         })
     }
+
+    fn control(&self, sql: &str) -> Result<()> {
+        let mut statement = QuackStatement::new(self.session.clone());
+        statement.set_sql_query(sql)?;
+        statement.execute_update()?;
+        Ok(())
+    }
+    fn finish_transaction(&self, sql: &str) -> Result<()> {
+        if !self.manual {
+            return Err(ErrorHelper::invalid_state()
+                .message("connection is in autocommit mode")
+                .to_adbc());
+        }
+        self.control(sql)?;
+        self.control("BEGIN TRANSACTION")
+    }
 }
 
 impl Connection for QuackConnection {
@@ -130,11 +147,52 @@ impl Connection for QuackConnection {
 
     fn get_info(
         &self,
-        _codes: Option<HashSet<InfoCode>>,
+        codes: Option<HashSet<InfoCode>>,
     ) -> Result<Box<dyn RecordBatchReader + Send>> {
-        Err(ErrorHelper::not_implemented()
-            .message("get_info not implemented")
-            .to_adbc())
+        let mut info = driverbase::InfoRegistry::new();
+        info.add_string(InfoCode::DriverName, "ADBC Driver for DuckDB Quack");
+        info.add_string(InfoCode::VendorName, "DuckDB Quack");
+        info.add_string(InfoCode::DriverVersion, env!("CARGO_PKG_VERSION"));
+        info.add_string(
+            InfoCode::DriverArrowVersion,
+            format!("v{}", arrow_array::ARROW_VERSION),
+        );
+        info.add_bool(InfoCode::VendorSql, true);
+        info.add_bool(InfoCode::VendorSubstrait, false);
+        info.add_int64(InfoCode::DriverAdbcVersion, 1_001_000);
+        if codes
+            .as_ref()
+            .is_none_or(|codes| codes.contains(&InfoCode::VendorVersion))
+        {
+            let mut statement = QuackStatement::new(self.session.clone());
+            statement.set_sql_query("SELECT version()")?;
+            let mut version = None;
+            for batch in statement.execute()? {
+                let batch = batch
+                    .map_err(|e| ErrorHelper::invalid_data().message(e.to_string()).to_adbc())?;
+                let values = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .ok_or_else(|| {
+                        ErrorHelper::invalid_data()
+                            .message("invalid version result")
+                            .to_adbc()
+                    })?;
+                if values.len() == 1 && !values.is_null(0) {
+                    version = Some(values.value(0).trim_start_matches('v').to_owned());
+                }
+            }
+            info.add_string(
+                InfoCode::VendorVersion,
+                version.ok_or_else(|| {
+                    ErrorHelper::invalid_data()
+                        .message("missing vendor version")
+                        .to_adbc()
+                })?,
+            );
+        }
+        Ok(info.get_info(codes).build())
     }
 
     fn get_objects(
@@ -196,15 +254,11 @@ impl Connection for QuackConnection {
     }
 
     fn commit(&mut self) -> Result<()> {
-        Err(ErrorHelper::not_implemented()
-            .message("commit not implemented")
-            .to_adbc())
+        self.finish_transaction("COMMIT")
     }
 
     fn rollback(&mut self) -> Result<()> {
-        Err(ErrorHelper::not_implemented()
-            .message("rollback not implemented")
-            .to_adbc())
+        self.finish_transaction("ROLLBACK")
     }
 
     fn read_partition(
@@ -233,9 +287,22 @@ impl Optionable for QuackConnection {
                     .message("namespace must be a string")
                     .to_adbc())
             }
-            (OptionConnection::AutoCommit, OptionValue::String(value)) if value == "true" => Ok(()),
-            (OptionConnection::AutoCommit, _) => Err(ErrorHelper::not_implemented()
-                .message("manual transactions are unsupported")
+            (OptionConnection::AutoCommit, OptionValue::String(value))
+                if value == "true" || value == "false" =>
+            {
+                let manual = value == "false";
+                if manual != self.manual {
+                    self.control(if manual {
+                        "BEGIN TRANSACTION"
+                    } else {
+                        "COMMIT"
+                    })?;
+                    self.manual = manual;
+                }
+                Ok(())
+            }
+            (OptionConnection::AutoCommit, _) => Err(ErrorHelper::invalid_argument()
+                .message("autocommit must be true or false")
                 .to_adbc()),
             _ => Err(ErrorHelper::set_unknown_option(&key).to_adbc()),
         }
@@ -245,7 +312,7 @@ impl Optionable for QuackConnection {
         match key {
             OptionConnection::CurrentCatalog => self.namespace("current_database"),
             OptionConnection::CurrentSchema => self.namespace("current_schema"),
-            OptionConnection::AutoCommit => Ok("true".into()),
+            OptionConnection::AutoCommit => Ok((!self.manual).to_string()),
             _ => Err(ErrorHelper::get_unknown_option(&key).to_adbc()),
         }
     }
