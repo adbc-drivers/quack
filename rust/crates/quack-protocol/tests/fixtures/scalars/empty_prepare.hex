@@ -1,0 +1,24 @@
+# Copyright (c) 2026 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Captured from live server, V2_0_0 little-endian; exact response bytes.
+# DuckDB: v2.0.0; platform: linux_amd64; Quack: 3
+# SQL: SELECT * FROM (-- Copyright (c) 2026 ADBC Drivers Contributors -- -- Licensed under the Apache License, Version 2.0 (the "License"); -- you may not use this file except in compliance with the License. -- You may obtain a copy of the License at -- --         http://www.apache.org/licenses/LICENSE-2.0 -- -- Unless required by applicable law or agreed to in writing, software -- distributed under the License is distributed on an "AS IS" BASIS, -- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. -- See the License for the specific language governing permissions and -- limitations under the License.  SELECT CASE WHEN i % 3 = 2 THEN NULL WHEN i % 3 = 1 THEN '' ELSE 'こんにちは' END AS s,         CASE WHEN i % 3 = 2 THEN NULL WHEN i % 3 = 1 THEN from_hex('') ELSE from_hex('00ff') END AS b,         CASE WHEN i % 3 = 2 THEN NULL ELSE -1.23::DECIMAL(4,2) END AS d4,         CASE WHEN i % 3 = 2 THEN NULL ELSE -1.23::DECIMAL(9,2) END AS d9,         CASE WHEN i % 3 = 2 THEN NULL ELSE -1.23::DECIMAL(18,2) END AS d18,         CASE WHEN i % 3 = 2 THEN NULL ELSE -123456789012345678901234567890123456.78::DECIMAL(38,2) END AS d38,         CASE WHEN i % 3 = 2 THEN NULL ELSE DATE '1969-12-31' END AS dt,         CASE WHEN i % 3 = 2 THEN NULL ELSE TIME '12:00:00.123456' END AS tm,         CASE WHEN i % 3 = 2 THEN NULL ELSE TIMESTAMP '1969-12-31 23:59:59.999999' END AS ts,         CASE WHEN i % 3 = 2 THEN NULL ELSE TIMESTAMPTZ '1969-12-31 23:59:59.999999+00' END AS tz         FROM range(6) t(i) ORDER BY i ) q WHERE false
+# inline_rows: None; UUID: HugeInt { upper: 0, lower: 102 }
+01 00 04 03 00 ff ff ff ff ff ff ff ff ff 01 ff ff 01 00 0a 64 00 19 ff ff 64 00 1a ff ff 64 00
+15 65 00 01 64 00 02 c8 00 04 c9 00 02 ff ff ff ff 64 00 15 65 00 01 64 00 02 c8 00 09 c9 00 02
+ff ff ff ff 64 00 15 65 00 01 64 00 02 c8 00 12 c9 00 02 ff ff ff ff 64 00 15 65 00 01 64 00 02
+c8 00 26 c9 00 02 ff ff ff ff 64 00 0f ff ff 64 00 10 ff ff 64 00 13 ff ff 64 00 20 ff ff 02 00
+0a 01 73 01 62 02 64 34 02 64 39 03 64 31 38 03 64 33 38 02 64 74 02 74 6d 02 74 73 02 74 7a 05
+00 00 66 ff ff

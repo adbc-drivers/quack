@@ -22,8 +22,8 @@ use arrow_array::{
 use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, ScalarBuffer};
 use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
 use duckdb_wiredata::{
-    chunk::{DataChunk, Primitive, PrimitiveEncoding, PrimitiveVector},
-    logical_type::{LogicalType, LogicalTypeId},
+    chunk::{DataChunk, Primitive, Vector, VectorEncoding},
+    logical_type::{LogicalType, LogicalTypeId, TypeInfoKind},
 };
 use quack_protocol::message::WireString;
 
@@ -41,7 +41,7 @@ pub(crate) fn schema(types: &[LogicalType], names: &[WireString]) -> Result<Sche
         let name = name
             .as_str()
             .map_err(|error| ArrowError::ExternalError(Box::new(error)))?;
-        fields.push(Field::new(name, data_type(logical_type.id)?, true));
+        fields.push(Field::new(name, data_type(logical_type)?, true));
     }
     Ok(Arc::new(Schema::new(fields)))
 }
@@ -53,7 +53,7 @@ pub(crate) fn record_batch(chunk: DataChunk, schema: SchemaRef) -> Result<Record
         ));
     }
     for (logical_type, field) in chunk.types().iter().zip(schema.fields()) {
-        if &data_type(logical_type.id)? != field.data_type() {
+        if &data_type(logical_type)? != field.data_type() {
             return Err(ArrowError::SchemaError(
                 "chunk type differs from Arrow schema".into(),
             ));
@@ -74,13 +74,11 @@ pub(crate) fn record_batch(chunk: DataChunk, schema: SchemaRef) -> Result<Record
     )
 }
 
-fn numeric_array<T: ArrowPrimitiveType>(
-    vector: &PrimitiveVector,
-) -> Result<PrimitiveArray<T>, ArrowError>
+fn numeric_array<T: ArrowPrimitiveType>(vector: &Vector) -> Result<PrimitiveArray<T>, ArrowError>
 where
     T::Native: Primitive,
 {
-    if let PrimitiveEncoding::Flat { values, validity } = vector.encoding() {
+    if let VectorEncoding::Flat { values, validity } = vector.encoding() {
         let expected = vector
             .len()
             .checked_mul(size_of::<T::Native>())
@@ -136,7 +134,7 @@ where
         .map_err(|error| ArrowError::ExternalError(Box::new(error)))?;
     let mut validity: Option<Vec<u8>> = None;
     for index in 0..vector.len() {
-        let value = vector.get::<T::Native>(index).ok_or_else(|| {
+        let value = vector.get_physical::<T::Native>(index).ok_or_else(|| {
             ArrowError::ComputeError("validated primitive vector has no value at row".into())
         })?;
         match value {
@@ -162,8 +160,31 @@ where
     PrimitiveArray::<T>::try_new(values.into(), nulls)
 }
 
-fn data_type(id: LogicalTypeId) -> Result<DataType, ArrowError> {
+fn data_type(logical_type: &LogicalType) -> Result<DataType, ArrowError> {
+    let id = logical_type.id;
     match id {
+        LogicalTypeId::Varchar => Ok(DataType::Utf8),
+        LogicalTypeId::Blob => Ok(DataType::Binary),
+        LogicalTypeId::Decimal => match logical_type.info.as_ref().map(|info| &info.kind) {
+            Some(TypeInfoKind::Decimal { width, scale })
+                if *width > 0 && *width <= 38 && scale <= width =>
+            {
+                Ok(DataType::Decimal128(*width, *scale as i8))
+            }
+            _ => Err(ArrowError::SchemaError(
+                "invalid decimal precision or scale".into(),
+            )),
+        },
+        LogicalTypeId::Date => Ok(DataType::Date32),
+        LogicalTypeId::Time => Ok(DataType::Time64(arrow_schema::TimeUnit::Microsecond)),
+        LogicalTypeId::Timestamp => Ok(DataType::Timestamp(
+            arrow_schema::TimeUnit::Microsecond,
+            None,
+        )),
+        LogicalTypeId::TimestampTz => Ok(DataType::Timestamp(
+            arrow_schema::TimeUnit::Microsecond,
+            Some("UTC".into()),
+        )),
         LogicalTypeId::Boolean => Ok(DataType::Boolean),
         LogicalTypeId::TinyInt => Ok(DataType::Int8),
         LogicalTypeId::SmallInt => Ok(DataType::Int16),
@@ -181,8 +202,63 @@ fn data_type(id: LogicalTypeId) -> Result<DataType, ArrowError> {
     }
 }
 
-fn array(vector: &PrimitiveVector) -> Result<ArrayRef, ArrowError> {
+fn array(vector: &Vector) -> Result<ArrayRef, ArrowError> {
     match vector.logical_type() {
+        LogicalTypeId::Varchar | LogicalTypeId::Blob => {
+            let mut builder = arrow_array::builder::BinaryBuilder::new();
+            let mut size = 0usize;
+            for index in 0..vector.len() {
+                let value = vector
+                    .get_bytes(index)
+                    .ok_or_else(|| ArrowError::ComputeError("invalid variable-width row".into()))?;
+                if let Some(value) = value {
+                    size = size
+                        .checked_add(value.len())
+                        .filter(|size| *size <= i32::MAX as usize)
+                        .ok_or_else(|| {
+                            ArrowError::ComputeError("binary offsets exceed i32".into())
+                        })?;
+                    if vector.logical_type() == LogicalTypeId::Varchar {
+                        std::str::from_utf8(value)
+                            .map_err(|error| ArrowError::ParseError(error.to_string()))?;
+                    }
+                }
+                builder.append_option(value);
+            }
+            let binary = builder.finish();
+            if vector.logical_type() == LogicalTypeId::Varchar {
+                Ok(Arc::new(arrow_array::StringArray::from(binary)))
+            } else {
+                Ok(Arc::new(binary))
+            }
+        }
+        LogicalTypeId::Decimal => {
+            let DataType::Decimal128(precision, scale) = data_type(vector.descriptor())? else {
+                return Err(ArrowError::SchemaError("invalid decimal type".into()));
+            };
+            let mut builder = arrow_array::Decimal128Array::builder(vector.len());
+            for index in 0..vector.len() {
+                builder.append_option(
+                    vector
+                        .get_decimal(index)
+                        .ok_or_else(|| ArrowError::ComputeError("invalid decimal row".into()))?,
+                );
+            }
+            let array = builder
+                .finish()
+                .with_precision_and_scale(precision, scale)?;
+            array.validate_decimal_precision(precision)?;
+            Ok(Arc::new(array))
+        }
+        LogicalTypeId::Date => Ok(Arc::new(numeric_array::<Date32Type>(vector)?)),
+        LogicalTypeId::Time => Ok(Arc::new(numeric_array::<Time64MicrosecondType>(vector)?)),
+        LogicalTypeId::Timestamp => {
+            Ok(Arc::new(numeric_array::<TimestampMicrosecondType>(vector)?))
+        }
+        LogicalTypeId::TimestampTz => Ok(Arc::new(
+            numeric_array::<TimestampMicrosecondType>(vector)?.with_timezone("UTC"),
+        )),
+
         LogicalTypeId::Boolean => {
             let mut builder = BooleanArray::builder(vector.len());
             for index in 0..vector.len() {

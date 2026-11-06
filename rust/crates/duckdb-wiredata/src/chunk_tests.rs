@@ -92,7 +92,7 @@ fn chunk(rows: u32, columns: Vec<Vec<u8>>) -> Vec<u8> {
     bytes.extend([255, 255]);
     bytes
 }
-fn values(vector: &PrimitiveVector) -> Vec<Option<i32>> {
+fn values(vector: &Vector) -> Vec<Option<i32>> {
     (0..vector.len())
         .map(|index| vector.get::<i32>(index).unwrap())
         .collect()
@@ -117,7 +117,7 @@ fn flat_shared_buffers_and_prefix() {
         vec![Some(42), None, Some(-7)]
     );
     assert_eq!(decoded.columns()[0].get::<i32>(3), None);
-    let PrimitiveEncoding::Flat { values, validity } = decoded.columns()[0].encoding() else {
+    let VectorEncoding::Flat { values, validity } = decoded.columns()[0].encoding() else {
         panic!("expected flat")
     };
     let start = input.as_ptr() as usize;
@@ -148,15 +148,15 @@ fn compressed_vectors_remain_compressed() {
     .unwrap();
     assert!(matches!(
         decoded.columns()[0].encoding(),
-        PrimitiveEncoding::Constant { .. }
+        VectorEncoding::Constant { .. }
     ));
     assert!(matches!(
         decoded.columns()[2].encoding(),
-        PrimitiveEncoding::Dictionary { .. }
+        VectorEncoding::Dictionary { .. }
     ));
     assert!(matches!(
         decoded.columns()[3].encoding(),
-        PrimitiveEncoding::Sequence { .. }
+        VectorEncoding::Sequence { .. }
     ));
     assert_eq!(values(&decoded.columns()[0]), vec![Some(42); 4]);
     assert_eq!(values(&decoded.columns()[1]), vec![None; 4]);
@@ -248,7 +248,7 @@ fn unsupported_is_distinct() {
         .windows(5)
         .position(|v| v == [100, 0, 13, 255, 255])
         .unwrap();
-    wire[index + 2] = 25;
+    wire[index + 2] = 27;
     assert_eq!(decode(wire).unwrap_err().kind, DecodeErrorKind::Unsupported);
 }
 
@@ -501,5 +501,157 @@ fn float_payload_bits_survive_views() {
                 .to_bits(),
             bits
         );
+    }
+}
+
+fn scalar_chunk(rows: u32, id: u8, decimal: Option<(u8, u8)>, vector: Vec<u8>) -> Vec<u8> {
+    let mut ty = field(100, [id]);
+    if let Some((width, scale)) = decimal {
+        ty.extend(field(101, [1]));
+        ty.extend(field(100, [2]));
+        ty.extend(field(200, [width]));
+        ty.extend(field(201, [scale]));
+        ty.extend([255, 255]);
+    }
+    ty.extend([255, 255]);
+    let mut bytes = field(100, uint(rows.into()));
+    let mut types = uint(1);
+    types.extend(ty);
+    bytes.extend(field(101, types));
+    let mut columns = uint(1);
+    columns.extend(vector);
+    columns.extend([255, 255]);
+    bytes.extend(field(102, columns));
+    bytes.extend([255, 255]);
+    bytes
+}
+
+fn strings(modern: bool, values: &[&[u8]], mask: Option<&[u8]>) -> Vec<u8> {
+    let mut vector = field(100, [u8::from(mask.is_some())]);
+    if let Some(mask) = mask {
+        vector.extend(field(101, blob(mask)));
+    }
+    if modern {
+        let data: Vec<u8> = values.iter().flat_map(|v| v.iter().copied()).collect();
+        let lengths: Vec<u8> = values
+            .iter()
+            .flat_map(|v| (v.len() as u32).to_le_bytes())
+            .collect();
+        vector.extend(field(107, uint(data.len() as u64)));
+        vector.extend(field(108, blob(&lengths)));
+        vector.extend(field(109, blob(&data)));
+    } else {
+        let mut data = uint(values.len() as u64);
+        for value in values {
+            data.extend(blob(value));
+        }
+        vector.extend(field(102, data));
+    }
+    vector
+}
+
+#[test]
+fn variable_width_encodings_and_bounds() {
+    for id in [25, 26] {
+        for modern in [false, true] {
+            let child = strings(
+                modern,
+                &[b"hello", b"", b"", &[0, 255]],
+                Some(&[11, 0, 0, 0, 0, 0, 0, 0]),
+            );
+            for (rows, vector, expected) in [
+                (
+                    4,
+                    child.clone(),
+                    vec![
+                        Some(&b"hello"[..]),
+                        Some(&b""[..]),
+                        None,
+                        Some(&[0, 255][..]),
+                    ],
+                ),
+                (
+                    4,
+                    dictionary(&[3, 2, 0, 1], 4, child),
+                    vec![
+                        Some(&[0, 255][..]),
+                        None,
+                        Some(&b"hello"[..]),
+                        Some(&b""[..]),
+                    ],
+                ),
+                (
+                    3,
+                    constant(strings(modern, &[b"hello"], None)),
+                    vec![Some(&b"hello"[..]); 3],
+                ),
+                (0, strings(modern, &[], None), vec![]),
+            ] {
+                let wire = scalar_chunk(rows, id, None, vector);
+                let (chunk, consumed) = decode(wire.clone()).unwrap();
+                assert_eq!(consumed, wire.len());
+                let column = &chunk.columns()[0];
+                for (index, value) in expected.into_iter().enumerate() {
+                    assert_eq!(column.get_bytes(index), Some(value));
+                }
+                assert_eq!(column.get_bytes(rows as usize), None);
+                assert_eq!(column.get::<i32>(0), None);
+                for end in 0..wire.len() {
+                    assert!(decode(wire[..end].to_vec()).is_err());
+                }
+            }
+        }
+    }
+    let mut malformed = strings(true, &[b"a"], None);
+    let length = malformed.windows(2).position(|v| v == [108, 0]).unwrap() + 3;
+    malformed[length] = 2;
+    assert_eq!(
+        decode(scalar_chunk(1, 26, None, malformed))
+            .unwrap_err()
+            .kind,
+        DecodeErrorKind::Malformed
+    );
+}
+
+#[test]
+fn decimals_and_temporal_physical_storage() {
+    for (precision, size) in [(4, 2), (9, 4), (18, 8), (38, 16)] {
+        let coefficient = -123i128;
+        let mut vector = field(100, [1]);
+        vector.extend(field(101, blob(&[1, 0, 0, 0, 0, 0, 0, 0])));
+        let mut data = coefficient.to_le_bytes()[..size].to_vec();
+        data.extend(vec![255; size]);
+        vector.extend(field(102, blob(&data)));
+        for vector in [vector.clone(), dictionary(&[0, 1], 2, vector)] {
+            let wire = scalar_chunk(2, 21, Some((precision, 2)), vector);
+            let (chunk, _) = decode(wire.clone()).unwrap();
+            assert_eq!(chunk.columns()[0].get_decimal(0), Some(Some(-123)));
+            assert_eq!(chunk.columns()[0].get_decimal(1), Some(None));
+            assert_eq!(chunk.columns()[0].get::<i64>(0), None);
+            for end in 0..wire.len() {
+                assert!(decode(wire[..end].to_vec()).is_err());
+            }
+        }
+    }
+    for metadata in [None, Some((0, 0)), Some((39, 0)), Some((4, 5))] {
+        assert_eq!(
+            decode(scalar_chunk(0, 21, metadata, field(100, [0])))
+                .unwrap_err()
+                .kind,
+            DecodeErrorKind::Malformed
+        );
+    }
+    for id in [15, 16, 19, 32] {
+        let size = if id == 15 { 4 } else { 8 };
+        let mut vector = field(100, [0]);
+        vector.extend(field(102, blob(&(-1i64).to_le_bytes()[..size])));
+        let (chunk, _) = decode(scalar_chunk(3, id, None, constant(vector))).unwrap();
+        let column = &chunk.columns()[0];
+        if id == 15 {
+            assert_eq!(column.get_physical::<i32>(2), Some(Some(-1)));
+        } else {
+            assert_eq!(column.get_physical::<i64>(2), Some(Some(-1)));
+        }
+        assert_eq!(column.get::<i64>(0), None);
     }
 }
