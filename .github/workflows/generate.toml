@@ -21,7 +21,9 @@ private = false
 subdir = "rust"
 
 [lang.rust.validation]
-skip = true
+configs = [
+  { service_name = "test-service", vendor_version = "2.0" },
+]
 
 [lang.script]
 subdir = "cpp"
