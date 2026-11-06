@@ -13,5 +13,8 @@
 // limitations under the License.
 
 // part: metadata
+[tags]
+caveats = ["Negative decimal scales are represented as a wider decimal with scale zero."]
 
-skip = "Negative scales are not supported"
+// part: expected_schema
+{"format": "+s", "children": [{"name": "idx", "format": "l", "flags": ["nullable"]}, {"name": "value", "format": "d:4,0", "flags": ["nullable"]}]}

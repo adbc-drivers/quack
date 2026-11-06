@@ -22,6 +22,8 @@ license.workspace = true
 crate-type = ["lib", "cdylib"]
 
 [dependencies]
+bytes = "1"
+arrow-cast = "60"
 adbc_core = "0.25"
 adbc_ffi = "0.25"
 arrow-array = { version = "60", features = ["ffi"] }
@@ -36,4 +38,3 @@ url = "2"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
-bytes = "1"

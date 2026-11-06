@@ -218,6 +218,7 @@ enum QueryState {
     ReadyAck,
     AwaitingAck,
     AwaitingCancel,
+    AwaitingUpload { delivering: bool },
     Complete,
     Released,
     Failed,
@@ -235,9 +236,67 @@ pub struct Query {
     next_fetch: u64,
     accepted_batches: u64,
     terminal: bool,
+    uploaded_batches: u64,
+    upload_finished: bool,
 }
 
 impl Query {
+    /// Build an upload request tied to this active execution.
+    pub fn upload_request(&mut self, data: SendDataRequest) -> Result<Message, Error> {
+        match self.state {
+            QueryState::Delivering | QueryState::ReadyFetch => {}
+            _ => return Err(Error("query is not accepting upload data")),
+        }
+        if self.upload_finished {
+            return Err(Error("upload is already finished"));
+        }
+        if data.chunk_count == 0 {
+            if data.batch_index.is_some() || data.total_batches != Some(self.uploaded_batches) {
+                return Err(Error("invalid terminal upload count"));
+            }
+            self.upload_finished = true;
+        } else {
+            let next = self
+                .uploaded_batches
+                .checked_add(1)
+                .ok_or(Error("upload batch index overflow"))?;
+            if data.batch_index != Some(next) || data.total_batches.is_some() {
+                return Err(Error("upload batches must be consecutive"));
+            }
+            self.uploaded_batches = next;
+        }
+        self.state = QueryState::AwaitingUpload {
+            delivering: self.state == QueryState::Delivering,
+        };
+        Ok(Message {
+            header: Header {
+                connection_id: self.connection_id.clone(),
+                client_query_id: None,
+            },
+            body: MessageBody::SendDataRequest(data),
+        })
+    }
+
+    /// Supply known result metadata when PREPARE omitted it.
+    pub fn set_expected_result_schema(
+        &mut self,
+        types: Vec<duckdb_wiredata::logical_type::LogicalType>,
+        names: Vec<WireString>,
+    ) -> Result<(), Error> {
+        if types.len() != names.len() {
+            return Err(Error("result schema lengths differ"));
+        }
+        if self.result_types.is_empty() && self.state == QueryState::ReadyFetch {
+            self.result_types = types;
+            self.result_names = names;
+            Ok(())
+        } else if self.result_types == types && self.result_names == names {
+            Ok(())
+        } else {
+            Err(Error("conflicting result schema"))
+        }
+    }
+
     pub fn result_types(&self) -> &[duckdb_wiredata::logical_type::LogicalType] {
         &self.result_types
     }
@@ -360,7 +419,8 @@ impl Query {
         match self.state {
             QueryState::AwaitingPrepare
             | QueryState::AwaitingFetch { .. }
-            | QueryState::AwaitingAck => {}
+            | QueryState::AwaitingAck
+            | QueryState::AwaitingUpload { .. } => {}
             _ => return Err(QueryError::State(Error("query is not awaiting a response"))),
         }
         if let MessageBody::ErrorResponse(error) = response.body {
@@ -371,6 +431,14 @@ impl Query {
         let awaiting = std::mem::replace(&mut self.state, QueryState::Failed);
         // A failed validation leaves the query failed, so it cannot release the session.
         match (awaiting, response.body) {
+            (QueryState::AwaitingUpload { delivering }, MessageBody::SendDataResponse(_)) => {
+                self.state = if delivering {
+                    QueryState::Delivering
+                } else {
+                    QueryState::ReadyFetch
+                };
+                Ok(())
+            }
             (QueryState::AwaitingPrepare, MessageBody::PrepareResponse(body)) => {
                 if body.query_uuid() != self.uuid {
                     return Err(QueryError::State(Error("query UUID does not match")));
@@ -423,7 +491,8 @@ impl Query {
         match self.state {
             QueryState::AwaitingPrepare
             | QueryState::AwaitingFetch { .. }
-            | QueryState::AwaitingAck => {}
+            | QueryState::AwaitingAck
+            | QueryState::AwaitingUpload { .. } => {}
             _ => return Err(Error("query is not awaiting a response")),
         }
         self.pending.clear();
@@ -469,6 +538,8 @@ impl Connection {
             next_fetch: 1,
             accepted_batches: 0,
             terminal: false,
+            uploaded_batches: 0,
+            upload_finished: false,
         })
     }
 

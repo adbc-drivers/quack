@@ -19,10 +19,12 @@ edition = "2024"
 license.workspace = true
 
 [dependencies]
+bytes = "1"
+futures-util = "0.3"
 duckdb-wiredata = { path = "../duckdb-wiredata" }
 quack-protocol = { path = "../quack-protocol" }
 tokio = { version = "1", features = ["rt", "time", "sync"] }
-reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "net", "io-util", "test-util"] }

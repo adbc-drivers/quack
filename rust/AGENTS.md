@@ -86,6 +86,8 @@ Fix compiler warnings and pre-commit failures. Keep Cargo.lock current and
 include its updates in commits. Do not run `pixi run make` as a prerequisite
 for Rust tests.
 
+You may not modify validation/ unless explicitly instructed to.
+
 ## Tool and temporary-file hygiene
 
 - Codex must run `gh` and `pre-commit` outside the sandbox.

@@ -147,9 +147,14 @@ impl Vector {
     pub fn get_physical<T: Primitive>(&self, index: usize) -> Option<Option<T>> {
         let compatible = match self.logical_type {
             LogicalTypeId::Date => T::LOGICAL_TYPE == LogicalTypeId::Integer,
-            LogicalTypeId::Time | LogicalTypeId::Timestamp | LogicalTypeId::TimestampTz => {
-                T::LOGICAL_TYPE == LogicalTypeId::BigInt
-            }
+            LogicalTypeId::TimeNs
+            | LogicalTypeId::TimestampTzNs
+            | LogicalTypeId::Time
+            | LogicalTypeId::TimestampSec
+            | LogicalTypeId::TimestampMs
+            | LogicalTypeId::TimestampNs
+            | LogicalTypeId::Timestamp
+            | LogicalTypeId::TimestampTz => T::LOGICAL_TYPE == LogicalTypeId::BigInt,
             LogicalTypeId::Decimal => match decimal_width(&self.descriptor) {
                 Some(2) => T::LOGICAL_TYPE == LogicalTypeId::SmallInt,
                 Some(4) => T::LOGICAL_TYPE == LogicalTypeId::Integer,
@@ -305,7 +310,14 @@ fn decimal_width(logical_type: &LogicalType) -> Option<usize> {
 fn physical_width(id: LogicalTypeId) -> Option<usize> {
     match id {
         LogicalTypeId::Date => Some(4),
-        LogicalTypeId::Time | LogicalTypeId::Timestamp | LogicalTypeId::TimestampTz => Some(8),
+        LogicalTypeId::TimeNs
+        | LogicalTypeId::TimestampTzNs
+        | LogicalTypeId::Time
+        | LogicalTypeId::TimestampSec
+        | LogicalTypeId::TimestampMs
+        | LogicalTypeId::TimestampNs
+        | LogicalTypeId::Timestamp
+        | LogicalTypeId::TimestampTz => Some(8),
         LogicalTypeId::Boolean => Some(1),
         LogicalTypeId::TinyInt => Some(1),
         LogicalTypeId::SmallInt => Some(2),

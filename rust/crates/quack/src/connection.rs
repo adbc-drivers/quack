@@ -146,12 +146,21 @@ impl Connection for QuackConnection {
 impl Optionable for QuackConnection {
     type Option = OptionConnection;
 
-    fn set_option(&mut self, key: Self::Option, _value: OptionValue) -> Result<()> {
-        Err(ErrorHelper::set_unknown_option(&key).to_adbc())
+    fn set_option(&mut self, key: Self::Option, value: OptionValue) -> Result<()> {
+        match (&key, value) {
+            (OptionConnection::AutoCommit, OptionValue::String(value)) if value == "true" => Ok(()),
+            (OptionConnection::AutoCommit, _) => Err(ErrorHelper::not_implemented()
+                .message("manual transactions are unsupported")
+                .to_adbc()),
+            _ => Err(ErrorHelper::set_unknown_option(&key).to_adbc()),
+        }
     }
 
     fn get_option_string(&self, key: Self::Option) -> Result<String> {
-        Err(ErrorHelper::get_unknown_option(&key).to_adbc())
+        match key {
+            OptionConnection::AutoCommit => Ok("true".into()),
+            _ => Err(ErrorHelper::get_unknown_option(&key).to_adbc()),
+        }
     }
 
     fn get_option_bytes(&self, key: Self::Option) -> Result<Vec<u8>> {

@@ -176,7 +176,23 @@ fn data_type(logical_type: &LogicalType) -> Result<DataType, ArrowError> {
             )),
         },
         LogicalTypeId::Date => Ok(DataType::Date32),
+        LogicalTypeId::TimeNs => Ok(DataType::Time64(arrow_schema::TimeUnit::Nanosecond)),
+        LogicalTypeId::TimestampTzNs => Ok(DataType::Timestamp(
+            arrow_schema::TimeUnit::Nanosecond,
+            Some("UTC".into()),
+        )),
         LogicalTypeId::Time => Ok(DataType::Time64(arrow_schema::TimeUnit::Microsecond)),
+        LogicalTypeId::TimestampSec => {
+            Ok(DataType::Timestamp(arrow_schema::TimeUnit::Second, None))
+        }
+        LogicalTypeId::TimestampMs => Ok(DataType::Timestamp(
+            arrow_schema::TimeUnit::Millisecond,
+            None,
+        )),
+        LogicalTypeId::TimestampNs => Ok(DataType::Timestamp(
+            arrow_schema::TimeUnit::Nanosecond,
+            None,
+        )),
         LogicalTypeId::Timestamp => Ok(DataType::Timestamp(
             arrow_schema::TimeUnit::Microsecond,
             None,
@@ -251,7 +267,18 @@ fn array(vector: &Vector) -> Result<ArrayRef, ArrowError> {
             Ok(Arc::new(array))
         }
         LogicalTypeId::Date => Ok(Arc::new(numeric_array::<Date32Type>(vector)?)),
+        LogicalTypeId::TimeNs => Ok(Arc::new(numeric_array::<Time64NanosecondType>(vector)?)),
+        LogicalTypeId::TimestampTzNs => Ok(Arc::new(
+            numeric_array::<TimestampNanosecondType>(vector)?.with_timezone("UTC"),
+        )),
         LogicalTypeId::Time => Ok(Arc::new(numeric_array::<Time64MicrosecondType>(vector)?)),
+        LogicalTypeId::TimestampSec => Ok(Arc::new(numeric_array::<TimestampSecondType>(vector)?)),
+        LogicalTypeId::TimestampMs => {
+            Ok(Arc::new(numeric_array::<TimestampMillisecondType>(vector)?))
+        }
+        LogicalTypeId::TimestampNs => {
+            Ok(Arc::new(numeric_array::<TimestampNanosecondType>(vector)?))
+        }
         LogicalTypeId::Timestamp => {
             Ok(Arc::new(numeric_array::<TimestampMicrosecondType>(vector)?))
         }

@@ -342,7 +342,11 @@ pub fn validate_chunk_schema(
             kind: DecodeErrorKind::Malformed,
             offset: 0,
             context: "result schema",
-            message: "chunk types differ from PREPARE result types".into(),
+            message: format!(
+                "chunk types differ from PREPARE result types: {:?} versus {:?}",
+                chunk.types(),
+                types
+            ),
         });
     }
     Ok(())
@@ -683,6 +687,24 @@ pub fn decode(input: impl Into<Bytes>) -> Result<Message, DecodeError> {
 
 /// Serialize metadata and borrow opaque bytes without copying their contents.
 pub fn encode(message: &Message) -> Result<EncodedMessage<'_>, EncodeError> {
+    encode_inner(message, false)
+}
+
+/// Encode a SEND_DATA header whose payload is supplied separately by the transport.
+pub fn encode_upload_header(message: &Message) -> Result<Vec<u8>, EncodeError> {
+    if !matches!(message.body, MessageBody::SendDataRequest(_)) {
+        return Err(EncodeError {
+            context: "upload",
+            message: "expected SEND_DATA request",
+        });
+    }
+    Ok(encode_inner(message, true)?.prefix)
+}
+
+fn encode_inner(
+    message: &Message,
+    external_payload: bool,
+) -> Result<EncodedMessage<'_>, EncodeError> {
     let mut writer = Writer {
         bytes: Vec::new(),
         context: "header",
@@ -905,7 +927,7 @@ pub fn encode(message: &Message) -> Result<EncodedMessage<'_>, EncodeError> {
                 Writer::optional_idx,
             )?;
             payload = value.payload.as_bytes();
-            if !payload_consistent(value.chunk_count, payload) {
+            if !external_payload && !payload_consistent(value.chunk_count, payload) {
                 return Err(EncodeError {
                     context: "SendDataRequest.payload",
                     message: "chunk count and payload emptiness disagree",

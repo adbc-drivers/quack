@@ -36,6 +36,14 @@
 //! materialized into final Arrow allocations. HTTP aggregation may copy before
 //! decoding, and retaining a small buffer can retain the whole response body.
 //!
+//! Bulk ingestion supports create, append, replace, and create-append with bound
+//! Arrow batches or readers. Uploads retain compatible fixed-width and variable
+//! value buffers through segmented HTTP bodies. Boolean layout, decimal narrowing,
+//! temporal normalization, and incompatible validity masks require conversion.
+//! Dictionaries without null keys retain their values; nullable keys are expanded.
+//! Each wire chunk repeats its dictionary; cross-chunk dictionary reuse is unsupported.
+//! Input streams are consumed once. Setting SQL clears the ingestion target and binding.
+//!
 //! Connections, statements, and readers share a background Tokio runtime.
 //! Call this synchronous driver outside a Tokio runtime context.
 
@@ -44,6 +52,7 @@ mod conversion;
 mod database;
 mod driver;
 mod error;
+mod ingest;
 mod statement;
 
 use adbc_ffi::export_driver;
