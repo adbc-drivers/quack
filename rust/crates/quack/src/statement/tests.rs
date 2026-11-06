@@ -585,3 +585,63 @@ fn live_scalar_arrow_results() {
         }
     }
 }
+
+#[test]
+fn live_execute_update() {
+    let Some(database) = database() else {
+        return;
+    };
+    let mut connection = database.new_connection().unwrap();
+    let mut statement = connection.new_statement().unwrap();
+    assert_eq!(
+        statement.execute_update().unwrap_err().status,
+        Status::InvalidState
+    );
+    for mode in [None, Some(0), Some(1)] {
+        statement.inline_rows = mode;
+        for sql in [
+            "CREATE TEMP TABLE update_test (v INTEGER)",
+            "INSERT INTO update_test VALUES (1), (2)",
+            "UPDATE update_test SET v = v + 10",
+            "DELETE FROM update_test WHERE v = 11",
+            "UPDATE update_test SET v = 0 WHERE false",
+        ] {
+            statement.set_sql_query(sql).unwrap();
+            assert_eq!(statement.execute_update().unwrap(), None);
+        }
+        statement
+            .set_sql_query("SELECT v FROM update_test")
+            .unwrap();
+        let mut reader = statement.execute().unwrap();
+        assert_eq!(
+            statement.execute_update().unwrap_err().status,
+            Status::InvalidState
+        );
+        let batch = reader.next().unwrap().unwrap();
+        assert_eq!(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values(),
+            &[12]
+        );
+        assert!(reader.next().is_none());
+        for sql in [
+            "DROP TABLE update_test",
+            "SELECT * FROM range(5000)",
+            "SELECT 1 WHERE false",
+        ] {
+            statement.set_sql_query(sql).unwrap();
+            assert_eq!(statement.execute_update().unwrap(), None);
+        }
+        statement.set_sql_query("SELECT missing_column").unwrap();
+        assert_eq!(
+            statement.execute_update().unwrap_err().status,
+            Status::Unknown
+        );
+        statement.set_sql_query("SELECT 42").unwrap();
+        assert_eq!(statement.execute_update().unwrap(), None);
+    }
+}

@@ -41,6 +41,25 @@ impl QuackStatement {
             inline_rows: None,
         }
     }
+    fn start_query(&self) -> Result<quack_tokio::Query> {
+        let sql = self.sql.as_ref().ok_or_else(|| {
+            ErrorHelper::invalid_state()
+                .message("SQL query is required")
+                .to_adbc()
+        })?;
+        let mut connection = self.session.connection()?;
+        let query = self
+            .session
+            .runtime
+            .block_on(connection.execute(quack_protocol::state::QueryParams {
+                query: sql.clone().into(),
+                uuid: query_uuid(),
+                inline_rows: self.inline_rows.map(|value| value as u64),
+            }))
+            .map_err(|error| query_error(error.as_ref()))?;
+        drop(connection);
+        Ok(query)
+    }
 }
 
 fn query_uuid() -> quack_protocol::message::HugeInt {
@@ -115,22 +134,7 @@ impl Statement for QuackStatement {
     }
 
     fn execute(&mut self) -> Result<Box<dyn RecordBatchReader + Send>> {
-        let sql = self.sql.as_ref().ok_or_else(|| {
-            ErrorHelper::invalid_state()
-                .message("SQL query is required")
-                .to_adbc()
-        })?;
-        let mut connection = self.session.connection()?;
-        let mut query = self
-            .session
-            .runtime
-            .block_on(connection.execute(quack_protocol::state::QueryParams {
-                query: sql.clone().into(),
-                uuid: query_uuid(),
-                inline_rows: self.inline_rows.map(|value| value as u64),
-            }))
-            .map_err(|error| query_error(error.as_ref()))?;
-        drop(connection);
+        let mut query = self.start_query()?;
         let schema = match conversion::schema(query.result_types(), query.result_names()) {
             Ok(schema) => schema,
             Err(error) => {
@@ -153,9 +157,15 @@ impl Statement for QuackStatement {
     }
 
     fn execute_update(&mut self) -> Result<Option<i64>> {
-        Err(ErrorHelper::not_implemented()
-            .message("execute_update not implemented")
-            .to_adbc())
+        let mut query = self.start_query()?;
+        while self
+            .session
+            .runtime
+            .block_on(query.next_chunk())
+            .map_err(|error| query_error(error.as_ref()))?
+            .is_some()
+        {}
+        Ok(None)
     }
 
     fn execute_schema(&mut self) -> Result<Schema> {
