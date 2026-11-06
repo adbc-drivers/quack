@@ -16,8 +16,9 @@ use crate::error::ErrorHelper;
 use crate::statement::QuackStatement;
 use adbc_core::error::Result;
 use adbc_core::options::{InfoCode, ObjectDepth, OptionConnection, OptionValue};
-use adbc_core::{Connection, Optionable};
+use adbc_core::{Connection, Optionable, Statement};
 use arrow_array::RecordBatchReader;
+use arrow_array::{Array, StringArray};
 use arrow_schema::Schema;
 use driverbase::error::ErrorHelper as _;
 use std::collections::HashSet;
@@ -48,6 +49,70 @@ impl Drop for Session {
 
 pub struct QuackConnection {
     pub(crate) session: std::sync::Arc<Session>,
+}
+
+impl QuackConnection {
+    fn namespace(&self, function: &str) -> Result<String> {
+        let mut statement = QuackStatement::new(self.session.clone());
+        statement.set_sql_query(format!("SELECT {function}()"))?;
+        let mut values = Vec::new();
+        for batch in statement.execute()? {
+            let batch = batch.map_err(|error| {
+                ErrorHelper::invalid_data()
+                    .context("read current namespace")
+                    .message(error.to_string())
+                    .to_adbc()
+            })?;
+            let array = batch
+                .columns()
+                .first()
+                .and_then(|array| array.as_any().downcast_ref::<StringArray>())
+                .ok_or_else(|| {
+                    ErrorHelper::invalid_data()
+                        .message("expected namespace string")
+                        .to_adbc()
+                })?;
+            for index in 0..array.len() {
+                if array.is_null(index) {
+                    return Err(ErrorHelper::invalid_data()
+                        .message("null namespace")
+                        .to_adbc());
+                }
+                values.push(array.value(index).to_owned());
+            }
+        }
+        if values.len() != 1 {
+            return Err(ErrorHelper::invalid_data()
+                .message("expected one namespace value")
+                .to_adbc());
+        }
+        Ok(values.remove(0))
+    }
+
+    fn set_namespace(&self, catalog: bool, value: String) -> Result<()> {
+        let (catalog, schema) = if catalog {
+            (value, "main".to_owned())
+        } else {
+            (self.namespace("current_database")?, value)
+        };
+        let mut statement = QuackStatement::new(self.session.clone());
+        statement.set_sql_query(format!(
+            "USE {}.{}",
+            crate::ingest::quote(&catalog),
+            crate::ingest::quote(&schema)
+        ))?;
+        statement.execute_update().map(|_| ()).map_err(|mut error| {
+            if error.status == adbc_core::error::Status::Unknown
+                && (error.message.to_lowercase().contains("does not exist")
+                    || error
+                        .message
+                        .contains("SET schema: No catalog + schema named"))
+            {
+                error.status = adbc_core::error::Status::NotFound;
+            }
+            error
+        })
+    }
 }
 
 impl Connection for QuackConnection {
@@ -157,6 +222,17 @@ impl Optionable for QuackConnection {
 
     fn set_option(&mut self, key: Self::Option, value: OptionValue) -> Result<()> {
         match (&key, value) {
+            (OptionConnection::CurrentCatalog, OptionValue::String(value)) => {
+                self.set_namespace(true, value)
+            }
+            (OptionConnection::CurrentSchema, OptionValue::String(value)) => {
+                self.set_namespace(false, value)
+            }
+            (OptionConnection::CurrentCatalog | OptionConnection::CurrentSchema, _) => {
+                Err(ErrorHelper::invalid_argument()
+                    .message("namespace must be a string")
+                    .to_adbc())
+            }
             (OptionConnection::AutoCommit, OptionValue::String(value)) if value == "true" => Ok(()),
             (OptionConnection::AutoCommit, _) => Err(ErrorHelper::not_implemented()
                 .message("manual transactions are unsupported")
@@ -167,6 +243,8 @@ impl Optionable for QuackConnection {
 
     fn get_option_string(&self, key: Self::Option) -> Result<String> {
         match key {
+            OptionConnection::CurrentCatalog => self.namespace("current_database"),
+            OptionConnection::CurrentSchema => self.namespace("current_schema"),
             OptionConnection::AutoCommit => Ok("true".into()),
             _ => Err(ErrorHelper::get_unknown_option(&key).to_adbc()),
         }
