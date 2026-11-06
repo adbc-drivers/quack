@@ -16,6 +16,7 @@
 name = "quack-protocol"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
 
 [dependencies]
 duckdb-wiredata = { path = "../duckdb-wiredata" }

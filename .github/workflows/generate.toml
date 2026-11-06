@@ -17,6 +17,12 @@
 driver = "quack"
 private = false
 
+[lang.rust]
+subdir = "rust"
+
+[lang.rust.validation]
+skip = true
+
 [lang.script]
 subdir = "cpp"
 

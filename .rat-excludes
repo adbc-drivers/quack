@@ -16,3 +16,5 @@ cpp/license.tpl
 cpp/pixi.lock
 cpp/vcpkg.json
 rust/Cargo.lock
+rust/license.tpl
+rust/pixi.lock
