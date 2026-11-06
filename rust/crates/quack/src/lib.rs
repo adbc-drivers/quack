@@ -61,3 +61,5 @@ export_driver!(AdbcDriverQuackInit, driver::QuackDriver);
 
 #[cfg(test)]
 mod primitive_tests;
+
+mod objects;
