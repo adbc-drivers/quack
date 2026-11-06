@@ -125,6 +125,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "quack-protocol"
+version = "0.1.0"
+dependencies = [
+ "duckdb-wiredata",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
