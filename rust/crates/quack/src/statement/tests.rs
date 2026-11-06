@@ -325,7 +325,11 @@ fn live_exported_adbc_query() {
             ADBC_STATUS_INVALID_STATE
         );
         assert_eq!(
-            driver.StatementSetSqlQuery.unwrap()(&mut statement, c"SELECT 42".as_ptr(), &mut error),
+            driver.StatementSetSqlQuery.unwrap()(
+                &mut statement,
+                CString::new(crate::primitive_tests::SQL).unwrap().as_ptr(),
+                &mut error
+            ),
             ADBC_STATUS_OK
         );
         assert_eq!(
@@ -359,20 +363,13 @@ fn live_exported_adbc_query() {
                 ADBC_STATUS_OK
             );
             let mut reader = RecordBatchStreamReader::try_new(stream).unwrap();
-            assert_eq!(
-                reader.schema().field(0).data_type(),
-                &arrow_schema::DataType::Int32
-            );
-            let batch = reader.next().unwrap().unwrap();
-            assert_eq!(
-                batch
-                    .column(0)
-                    .as_any()
-                    .downcast_ref::<Int32Array>()
-                    .unwrap()
-                    .value(0),
-                42
-            );
+            let mut rows = 0;
+            for batch in reader.by_ref() {
+                let batch = batch.unwrap();
+                crate::primitive_tests::check_mixed(&batch, rows);
+                rows += batch.num_rows();
+            }
+            assert_eq!(rows, 6);
             assert!(reader.next().is_none());
             stream = FFI_ArrowArrayStream::empty();
         }
@@ -385,7 +382,7 @@ fn live_exported_adbc_query() {
             ),
             ADBC_STATUS_OK
         );
-        let mut reader = RecordBatchStreamReader::try_new(stream).unwrap();
+        let reader = RecordBatchStreamReader::try_new(stream).unwrap();
         assert_eq!(
             driver.StatementRelease.unwrap()(&mut statement, &mut error),
             ADBC_STATUS_OK
@@ -398,18 +395,13 @@ fn live_exported_adbc_query() {
             driver.DatabaseRelease.unwrap()(&mut database, &mut error),
             ADBC_STATUS_OK
         );
-        let batch = reader.next().unwrap().unwrap();
-        assert!(reader.next().is_none());
-        drop(reader);
-        assert_eq!(
-            batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0),
-            42
-        );
+        let batches = reader.collect::<std::result::Result<Vec<_>, _>>().unwrap();
+        let mut rows = 0;
+        for batch in batches {
+            crate::primitive_tests::check_mixed(&batch, rows);
+            rows += batch.num_rows();
+        }
+        assert_eq!(rows, 6);
     }
 }
 
@@ -434,9 +426,49 @@ fn live_remote_error_and_unsupported_schema() {
     let mut reader = statement.execute().unwrap();
     assert!(reader.next().unwrap().is_ok());
     assert!(reader.next().is_none());
-    statement.set_sql_query("SELECT TRUE").unwrap();
+    statement.set_sql_query("SELECT 'unsupported'").unwrap();
     assert_eq!(
         statement.execute().err().unwrap().status,
         Status::NotImplemented
     );
+}
+
+#[test]
+fn live_primitive_arrow_results() {
+    use crate::primitive_tests::{MULTI_SQL, SQL, check_mixed, check_multi};
+    let Some(database) = database() else {
+        return;
+    };
+    let mut connection = database.new_connection().unwrap();
+    let mut statement = connection.new_statement().unwrap();
+    let empty = format!("SELECT * FROM ({SQL}) q WHERE false");
+    for mode in [None, Some(0), Some(1)] {
+        if let Some(mode) = mode {
+            statement
+                .set_option(
+                    OptionStatement::Other(INLINE_ROWS.into()),
+                    OptionValue::Int(mode),
+                )
+                .unwrap();
+        }
+        for (sql, expected) in [(SQL, 6), (empty.as_str(), 0), (MULTI_SQL, 2050)] {
+            statement.set_sql_query(sql).unwrap();
+            let reader = statement.execute().unwrap();
+            assert_eq!(
+                reader.schema().fields().len(),
+                if expected == 2050 { 3 } else { 11 }
+            );
+            let batches = reader.collect::<std::result::Result<Vec<_>, _>>().unwrap();
+            let mut rows = 0;
+            for batch in batches {
+                if expected == 2050 {
+                    check_multi(&batch, rows);
+                } else {
+                    check_mixed(&batch, rows);
+                }
+                rows += batch.num_rows();
+            }
+            assert_eq!(rows, expected);
+        }
+    }
 }

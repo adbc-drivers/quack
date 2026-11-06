@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Validated, shared views of little-endian DuckDB INTEGER chunks.
+//! Validated, shared views of little-endian DuckDB primitive chunks.
 
 use crate::{
     decode::{DecodeError, Reader},
@@ -24,7 +24,7 @@ use bytes::Bytes;
 pub struct DataChunk {
     rows: usize,
     types: Vec<LogicalType>,
-    columns: Vec<IntegerVector>,
+    columns: Vec<PrimitiveVector>,
 }
 
 impl DataChunk {
@@ -34,17 +34,18 @@ impl DataChunk {
     pub fn types(&self) -> &[LogicalType] {
         &self.types
     }
-    pub fn columns(&self) -> &[IntegerVector] {
+    pub fn columns(&self) -> &[PrimitiveVector] {
         &self.columns
     }
-    pub fn into_columns(self) -> Vec<IntegerVector> {
+    pub fn into_columns(self) -> Vec<PrimitiveVector> {
         self.columns
     }
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct IntegerVector {
+pub struct PrimitiveVector {
     len: usize,
+    logical_type: LogicalTypeId,
     storage: Storage,
 }
 
@@ -54,10 +55,10 @@ enum Storage {
         values: Bytes,
         validity: Option<Bytes>,
     },
-    Constant(Box<IntegerVector>),
+    Constant(Box<PrimitiveVector>),
     Dictionary {
         selection: Bytes,
-        dictionary: Box<IntegerVector>,
+        dictionary: Box<PrimitiveVector>,
     },
     Sequence {
         start: i64,
@@ -67,17 +68,17 @@ enum Storage {
 
 /// Borrowed encoding information; all byte buffers are validated shared views.
 #[derive(Debug)]
-pub enum IntegerEncoding<'a> {
+pub enum PrimitiveEncoding<'a> {
     Flat {
         values: &'a Bytes,
         validity: Option<&'a Bytes>,
     },
     Constant {
-        value: &'a IntegerVector,
+        value: &'a PrimitiveVector,
     },
     Dictionary {
         selection: &'a Bytes,
-        dictionary: &'a IntegerVector,
+        dictionary: &'a PrimitiveVector,
     },
     Sequence {
         start: i64,
@@ -85,36 +86,41 @@ pub enum IntegerEncoding<'a> {
     },
 }
 
-impl IntegerVector {
+impl PrimitiveVector {
     pub fn len(&self) -> usize {
         self.len
     }
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
-    pub fn encoding(&self) -> IntegerEncoding<'_> {
+    pub fn encoding(&self) -> PrimitiveEncoding<'_> {
         match &self.storage {
-            Storage::Flat { values, validity } => IntegerEncoding::Flat {
+            Storage::Flat { values, validity } => PrimitiveEncoding::Flat {
                 values,
                 validity: validity.as_ref(),
             },
-            Storage::Constant(value) => IntegerEncoding::Constant { value },
+            Storage::Constant(value) => PrimitiveEncoding::Constant { value },
             Storage::Dictionary {
                 selection,
                 dictionary,
-            } => IntegerEncoding::Dictionary {
+            } => PrimitiveEncoding::Dictionary {
                 selection,
                 dictionary,
             },
-            Storage::Sequence { start, increment } => IntegerEncoding::Sequence {
+            Storage::Sequence { start, increment } => PrimitiveEncoding::Sequence {
                 start: *start,
                 increment: *increment,
             },
         }
     }
-    /// `None` means out of bounds; `Some(None)` is a SQL NULL.
-    pub fn get(&self, index: usize) -> Option<Option<i32>> {
-        if index >= self.len {
+    pub fn logical_type(&self) -> LogicalTypeId {
+        self.logical_type
+    }
+
+    /// `None` means out of bounds or a mismatched requested type;
+    /// `Some(None)` is a SQL NULL. No numeric coercion is performed.
+    pub fn get<T: Primitive>(&self, index: usize) -> Option<Option<T>> {
+        if index >= self.len || self.logical_type != T::LOGICAL_TYPE {
             return None;
         }
         match &self.storage {
@@ -125,9 +131,8 @@ impl IntegerVector {
                 {
                     return Some(None);
                 }
-                let offset = index.checked_mul(4)?;
-                let value = values.get(offset..)?.first_chunk::<4>()?;
-                Some(Some(i32::from_le_bytes(*value)))
+                let offset = index.checked_mul(T::WIDTH)?;
+                Some(Some(T::read(values.get(offset..offset + T::WIDTH)?)?))
             }
             Storage::Constant(value) => value.get(0),
             Storage::Dictionary {
@@ -140,9 +145,94 @@ impl IntegerVector {
             }
             Storage::Sequence { start, increment } => {
                 let value = i128::from(*start) + i128::from(*increment) * index as i128;
-                Some(Some(i32::try_from(value).ok()?))
+                Some(Some(T::from_sequence(value)?))
             }
         }
+    }
+}
+
+mod sealed {
+    pub trait Sealed {}
+}
+
+/// Native values supported by a primitive wire vector. Implementations are sealed.
+pub trait Primitive: sealed::Sealed + Copy {
+    const LOGICAL_TYPE: LogicalTypeId;
+    const WIDTH: usize;
+    fn read(bytes: &[u8]) -> Option<Self>;
+    fn from_sequence(value: i128) -> Option<Self>;
+}
+
+macro_rules! primitive {
+    ($native:ty, $id:ident, $width:literal, $sequence:expr) => {
+        impl sealed::Sealed for $native {}
+        impl Primitive for $native {
+            const LOGICAL_TYPE: LogicalTypeId = LogicalTypeId::$id;
+            const WIDTH: usize = $width;
+            fn read(bytes: &[u8]) -> Option<Self> {
+                Some(Self::from_le_bytes(bytes.try_into().ok()?))
+            }
+            fn from_sequence(value: i128) -> Option<Self> {
+                ($sequence)(value)
+            }
+        }
+    };
+}
+primitive!(i8, TinyInt, 1, |value| i8::try_from(value).ok());
+primitive!(i16, SmallInt, 2, |value| i16::try_from(value).ok());
+primitive!(i32, Integer, 4, |value| i32::try_from(value).ok());
+primitive!(i64, BigInt, 8, |value| i64::try_from(value).ok());
+primitive!(u8, UTinyInt, 1, |value| u8::try_from(value).ok());
+primitive!(u16, USmallInt, 2, |value| u16::try_from(value).ok());
+primitive!(u32, UInteger, 4, |value| u32::try_from(value).ok());
+primitive!(u64, UBigInt, 8, |value| u64::try_from(value).ok());
+primitive!(f32, Float, 4, |_| None);
+primitive!(f64, Double, 8, |_| None);
+
+impl sealed::Sealed for bool {}
+impl Primitive for bool {
+    const LOGICAL_TYPE: LogicalTypeId = LogicalTypeId::Boolean;
+    const WIDTH: usize = 1;
+    fn read(bytes: &[u8]) -> Option<Self> {
+        match bytes {
+            [0] => Some(false),
+            [1] => Some(true),
+            _ => None,
+        }
+    }
+    fn from_sequence(_: i128) -> Option<Self> {
+        None
+    }
+}
+
+fn physical_width(id: LogicalTypeId) -> Option<usize> {
+    match id {
+        LogicalTypeId::Boolean => Some(1),
+        LogicalTypeId::TinyInt => Some(1),
+        LogicalTypeId::SmallInt => Some(2),
+        LogicalTypeId::Integer => Some(4),
+        LogicalTypeId::BigInt => Some(8),
+        LogicalTypeId::UTinyInt => Some(1),
+        LogicalTypeId::USmallInt => Some(2),
+        LogicalTypeId::UInteger => Some(4),
+        LogicalTypeId::UBigInt => Some(8),
+        LogicalTypeId::Float => Some(4),
+        LogicalTypeId::Double => Some(8),
+        _ => None,
+    }
+}
+
+fn sequence_range(id: LogicalTypeId) -> Option<(i128, i128)> {
+    match id {
+        LogicalTypeId::TinyInt => Some((i128::from(i8::MIN), i128::from(i8::MAX))),
+        LogicalTypeId::SmallInt => Some((i128::from(i16::MIN), i128::from(i16::MAX))),
+        LogicalTypeId::Integer => Some((i128::from(i32::MIN), i128::from(i32::MAX))),
+        LogicalTypeId::BigInt => Some((i128::from(i64::MIN), i128::from(i64::MAX))),
+        LogicalTypeId::UTinyInt => Some((i128::from(u8::MIN), i128::from(u8::MAX))),
+        LogicalTypeId::USmallInt => Some((i128::from(u16::MIN), i128::from(u16::MAX))),
+        LogicalTypeId::UInteger => Some((i128::from(u32::MIN), i128::from(u32::MAX))),
+        LogicalTypeId::UBigInt => Some((i128::from(u64::MIN), i128::from(u64::MAX))),
+        _ => None,
     }
 }
 
@@ -181,7 +271,7 @@ impl Parser<'_> {
             .map_err(|_| self.reader.error("cannot allocate type descriptors"))?;
         for _ in 0..count {
             let logical_type = self.reader.logical_type(0)?;
-            if logical_type.id != LogicalTypeId::Integer {
+            if physical_width(logical_type.id).is_none() {
                 return Err(self.reader.unsupported(format!(
                     "unsupported chunk logical type {:?}",
                     logical_type.id
@@ -198,8 +288,8 @@ impl Parser<'_> {
         columns
             .try_reserve_exact(count)
             .map_err(|_| self.reader.error("cannot allocate columns"))?;
-        for _ in 0..count {
-            columns.push(self.vector(rows, 0)?);
+        for logical_type in &types {
+            columns.push(self.vector(rows, 0, logical_type.id)?);
             self.reader.end()?;
         }
         self.reader.context = "DataChunk";
@@ -236,20 +326,26 @@ impl Parser<'_> {
         }
         Err(self.reader.error("signed LEB128 exceeds encoded width"))
     }
-    fn vector(&mut self, len: usize, depth: usize) -> Result<IntegerVector, DecodeError> {
+    fn vector(
+        &mut self,
+        len: usize,
+        depth: usize,
+        logical_type: LogicalTypeId,
+    ) -> Result<PrimitiveVector, DecodeError> {
         if depth >= 64 {
             return Err(self.reader.error("vector nesting exceeds 64"));
         }
-        let tag = if self.reader.field(90, "IntegerVector.encoding", false)? {
+        let tag = if self.reader.field(90, "PrimitiveVector.encoding", false)? {
             self.reader.uint(8)?
         } else {
             0
         };
         let storage = match tag {
             0 => {
-                self.reader.field(100, "IntegerVector.has_validity", true)?;
+                self.reader
+                    .field(100, "PrimitiveVector.has_validity", true)?;
                 let validity = if self.reader.boolean()? {
-                    self.reader.field(101, "IntegerVector.validity", true)?;
+                    self.reader.field(101, "PrimitiveVector.validity", true)?;
                     let size = len
                         .div_ceil(64)
                         .checked_mul(8)
@@ -258,22 +354,35 @@ impl Parser<'_> {
                 } else {
                     None
                 };
-                self.reader.field(102, "IntegerVector.values", true)?;
+                self.reader.field(102, "PrimitiveVector.values", true)?;
                 let size = len
-                    .checked_mul(4)
+                    .checked_mul(
+                        physical_width(logical_type)
+                            .ok_or_else(|| self.reader.unsupported("unsupported primitive type"))?,
+                    )
                     .ok_or_else(|| self.reader.error("values size overflow"))?;
                 let values = self.blob(size)?;
+                if logical_type == LogicalTypeId::Boolean {
+                    for (index, value) in values.iter().enumerate() {
+                        let valid = validity
+                            .as_ref()
+                            .is_none_or(|mask| mask[index / 8] & (1 << (index % 8)) != 0);
+                        if valid && *value > 1 {
+                            return Err(self.reader.error("invalid BOOLEAN value"));
+                        }
+                    }
+                }
                 Storage::Flat { values, validity }
             }
-            2 => Storage::Constant(Box::new(self.vector(1, depth + 1)?)),
+            2 => Storage::Constant(Box::new(self.vector(1, depth + 1, logical_type)?)),
             3 => {
-                self.reader.field(91, "IntegerVector.selection", true)?;
+                self.reader.field(91, "PrimitiveVector.selection", true)?;
                 let size = len
                     .checked_mul(4)
                     .ok_or_else(|| self.reader.error("selection size overflow"))?;
                 let selection = self.blob(size)?;
                 self.reader
-                    .field(92, "IntegerVector.dictionary_count", true)?;
+                    .field(92, "PrimitiveVector.dictionary_count", true)?;
                 let count = usize::try_from(self.reader.uint(64)?)
                     .map_err(|_| self.reader.error("dictionary count overflow"))?;
                 for selected in selection.as_chunks::<4>().0 {
@@ -283,7 +392,7 @@ impl Parser<'_> {
                         return Err(self.reader.error("dictionary index out of bounds"));
                     }
                 }
-                let dictionary = Box::new(self.vector(count, depth + 1)?);
+                let dictionary = Box::new(self.vector(count, depth + 1, logical_type)?);
                 Storage::Dictionary {
                     selection,
                     dictionary,
@@ -291,15 +400,17 @@ impl Parser<'_> {
             }
             4 => {
                 self.reader
-                    .field(91, "IntegerVector.sequence_start", true)?;
+                    .field(91, "PrimitiveVector.sequence_start", true)?;
                 let start = self.signed()?;
                 self.reader
-                    .field(92, "IntegerVector.sequence_increment", true)?;
+                    .field(92, "PrimitiveVector.sequence_increment", true)?;
                 let increment = self.signed()?;
+                let (min, max) = sequence_range(logical_type)
+                    .ok_or_else(|| self.reader.unsupported("sequence requires an integer type"))?;
                 if len > 0 {
                     let end = i128::from(start) + i128::from(increment) * (len - 1) as i128;
-                    if i32::try_from(start).is_err() || i32::try_from(end).is_err() {
-                        return Err(self.reader.error("sequence exceeds INTEGER range"));
+                    if !(min..=max).contains(&i128::from(start)) || !(min..=max).contains(&end) {
+                        return Err(self.reader.error("sequence exceeds integer range"));
                     }
                 }
                 Storage::Sequence { start, increment }
@@ -310,7 +421,11 @@ impl Parser<'_> {
                     .unsupported(format!("unsupported vector encoding {tag}")));
             }
         };
-        Ok(IntegerVector { len, storage })
+        Ok(PrimitiveVector {
+            len,
+            logical_type,
+            storage,
+        })
     }
 }
 

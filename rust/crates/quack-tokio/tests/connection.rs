@@ -88,7 +88,7 @@ async fn query_initial_response() -> Result<(), Error> {
         assert!(query.next_chunk().await?.is_none());
     }
     for (index, sql, expected) in [
-        ("SELECT NULL::INTEGER AS answer", vec![None]),
+        ("SELECT NULL::INTEGER AS answer", vec![None::<i32>]),
         ("SELECT 42::INTEGER AS answer WHERE false", vec![]),
     ]
     .into_iter()
