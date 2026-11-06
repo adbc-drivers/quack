@@ -59,8 +59,9 @@ struct QueryReader {
 
 impl QueryReader {
     fn finish(&mut self) {
-        let _entered = self.session.runtime.enter();
-        drop(self.query.take());
+        if let Some(mut query) = self.query.take() {
+            let _ = self.session.runtime.block_on(query.cancel());
+        }
     }
 }
 
@@ -120,7 +121,7 @@ impl Statement for QuackStatement {
                 .to_adbc()
         })?;
         let mut connection = self.session.connection()?;
-        let query = self
+        let mut query = self
             .session
             .runtime
             .block_on(connection.execute(quack_protocol::state::QueryParams {
@@ -133,8 +134,7 @@ impl Statement for QuackStatement {
         let schema = match conversion::schema(query.result_types(), query.result_names()) {
             Ok(schema) => schema,
             Err(error) => {
-                let _entered = self.session.runtime.enter();
-                drop(query);
+                let _ = self.session.runtime.block_on(query.cancel());
                 let helper = match error {
                     ArrowError::NotYetImplemented(_) => ErrorHelper::not_implemented(),
                     _ => ErrorHelper::invalid_data(),
