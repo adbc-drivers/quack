@@ -399,9 +399,12 @@ impl Statement for QuackStatement {
     }
 
     fn prepare(&mut self) -> Result<()> {
-        Err(ErrorHelper::not_implemented()
-            .message("prepare not implemented")
-            .to_adbc())
+        if self.target.is_some() || self.sql.as_ref().is_none_or(|sql| sql.trim().is_empty()) {
+            return Err(ErrorHelper::invalid_state()
+                .message("SQL query is required")
+                .to_adbc());
+        }
+        Ok(())
     }
 
     fn set_sql_query(&mut self, query: impl AsRef<str>) -> Result<()> {
