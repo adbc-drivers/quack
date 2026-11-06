@@ -120,7 +120,7 @@ fn positioned(wire: Vec<u8>, aligned: bool) -> (Bytes, DataChunk) {
         storage.extend_from_slice(&wire);
         let owner = Bytes::from(storage);
         let (decoded, _) = decode(owner.slice(prefix..)).unwrap();
-        let PrimitiveEncoding::Flat { values, .. } = decoded.columns()[0].encoding() else {
+        let VectorEncoding::Flat { values, .. } = decoded.columns()[0].encoding() else {
             panic!("flat required")
         };
         if (values.as_ptr().align_offset(4) == 0) == aligned {
@@ -134,7 +134,7 @@ fn positioned(wire: Vec<u8>, aligned: bool) -> (Bytes, DataChunk) {
 fn aligned_values_and_padded_validity_share_owner() {
     let mask = [5, 255, 255, 255, 255, 255, 255, 255];
     let (owner, decoded) = positioned(chunk(3, vec![flat(&[42, 0, -7], Some(&mask))]), true);
-    let PrimitiveEncoding::Flat { values, validity } = decoded.columns()[0].encoding() else {
+    let VectorEncoding::Flat { values, validity } = decoded.columns()[0].encoding() else {
         panic!("flat required")
     };
     let values_ptr = values.as_ptr();
@@ -160,7 +160,7 @@ fn aligned_values_and_padded_validity_share_owner() {
 #[test]
 fn unaligned_values_materialize_but_validity_still_shared() {
     let (owner, decoded) = positioned(chunk(3, vec![flat(&[42, 0, -7], Some(&[5; 8]))]), false);
-    let PrimitiveEncoding::Flat { values, validity } = decoded.columns()[0].encoding() else {
+    let VectorEncoding::Flat { values, validity } = decoded.columns()[0].encoding() else {
         panic!("flat required")
     };
     let values_ptr = values.as_ptr();
@@ -256,7 +256,7 @@ fn schema_validation_and_mismatch_are_errors() {
         info: None,
     };
     let varchar = LogicalType {
-        id: LogicalTypeId::Varchar,
+        id: LogicalTypeId::Interval,
         info: None,
     };
     assert!(schema(std::slice::from_ref(&integer), &[]).is_err());
@@ -299,7 +299,7 @@ fn numeric_alignment_compression_and_bit_preservation() {
                 storage.extend_from_slice(&wire);
                 let owner = Bytes::from(storage);
                 let (chunk, _) = decode(owner.slice(prefix..)).unwrap();
-                let PrimitiveEncoding::Flat { values, validity } = chunk.columns()[0].encoding()
+                let VectorEncoding::Flat { values, validity } = chunk.columns()[0].encoding()
                 else {
                     panic!("flat")
                 };
@@ -404,4 +404,85 @@ fn same_width_schema_mismatch_is_rejected() {
         record_batch(chunk, integer_schema(&["x"])),
         Err(ArrowError::SchemaError(_))
     ));
+}
+
+fn scalar_chunk(rows: u32, id: u8, decimal: Option<(u8, u8)>, vector: Vec<u8>) -> Vec<u8> {
+    let mut ty = field(100, [id]);
+    if let Some((width, scale)) = decimal {
+        ty.extend(field(101, [1]));
+        ty.extend(field(100, [2]));
+        ty.extend(field(200, [width]));
+        ty.extend(field(201, [scale]));
+        ty.extend([255, 255]);
+    }
+    ty.extend([255, 255]);
+    let mut bytes = field(100, uint(rows.into()));
+    let mut types = uint(1);
+    types.extend(ty);
+    bytes.extend(field(101, types));
+    let mut columns = uint(1);
+    columns.extend(vector);
+    columns.extend([255, 255]);
+    bytes.extend(field(102, columns));
+    bytes.extend([255, 255]);
+    bytes
+}
+
+fn strings(modern: bool, values: &[&[u8]], mask: Option<&[u8]>) -> Vec<u8> {
+    let mut vector = field(100, [u8::from(mask.is_some())]);
+    if let Some(mask) = mask {
+        vector.extend(field(101, blob(mask)));
+    }
+    if modern {
+        let data: Vec<u8> = values.iter().flat_map(|v| v.iter().copied()).collect();
+        let lengths: Vec<u8> = values
+            .iter()
+            .flat_map(|v| (v.len() as u32).to_le_bytes())
+            .collect();
+        vector.extend(field(107, uint(data.len() as u64)));
+        vector.extend(field(108, blob(&lengths)));
+        vector.extend(field(109, blob(&data)));
+    } else {
+        let mut data = uint(values.len() as u64);
+        for value in values {
+            data.extend(blob(value));
+        }
+        vector.extend(field(102, data));
+    }
+    vector
+}
+
+#[test]
+fn scalar_arrow_validation() {
+    for id in [25, 26] {
+        let wire = scalar_chunk(1, id, None, strings(true, &[&[255, 0]], None));
+        let (chunk, _) = decode(wire).unwrap();
+        let schema = schema(chunk.types(), &["res".into()]).unwrap();
+        let batch = record_batch(chunk, schema);
+        if id == 25 {
+            assert!(batch.is_err());
+        } else {
+            assert_eq!(
+                batch
+                    .unwrap()
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<arrow_array::BinaryArray>()
+                    .unwrap()
+                    .value(0),
+                &[255, 0]
+            );
+        }
+    }
+    let mut vector = field(100, [0]);
+    vector.extend(field(102, blob(&(-123i64).to_le_bytes())));
+    let (chunk, _) = decode(scalar_chunk(1, 21, Some((10, 2)), vector)).unwrap();
+    let actual = schema(chunk.types(), &["res".into()]).unwrap();
+    let wrong = Arc::new(Schema::new(vec![Field::new(
+        "res",
+        DataType::Decimal128(10, 3),
+        true,
+    )]));
+    assert!(record_batch(chunk, wrong).is_err());
+    assert_eq!(actual.field(0).data_type(), &DataType::Decimal128(10, 2));
 }

@@ -426,7 +426,7 @@ fn live_remote_error_and_unsupported_schema() {
     let mut reader = statement.execute().unwrap();
     assert!(reader.next().unwrap().is_ok());
     assert!(reader.next().is_none());
-    statement.set_sql_query("SELECT 'unsupported'").unwrap();
+    statement.set_sql_query("SELECT INTERVAL '1 day'").unwrap();
     assert_eq!(
         statement.execute().err().unwrap().status,
         Status::NotImplemented
@@ -469,6 +469,119 @@ fn live_primitive_arrow_results() {
                 rows += batch.num_rows();
             }
             assert_eq!(rows, expected);
+        }
+    }
+}
+
+#[test]
+fn live_scalar_arrow_results() {
+    use arrow_array::{
+        BinaryArray, Date32Array, Decimal128Array, StringArray, Time64MicrosecondArray,
+        TimestampMicrosecondArray,
+    };
+    let Some(database) = database() else {
+        return;
+    };
+    let mut connection = database.new_connection().unwrap();
+    let mut statement = connection.new_statement().unwrap();
+    let sql = include_str!("../../../quack-protocol/tests/fixtures/scalars/mixed.sql")
+        .replace("range(6)", "range(2050)");
+    for mode in [None, Some(0), Some(1)] {
+        if let Some(mode) = mode {
+            statement
+                .set_option(
+                    OptionStatement::Other(INLINE_ROWS.into()),
+                    OptionValue::Int(mode),
+                )
+                .unwrap();
+        }
+        for empty in [false, true] {
+            statement
+                .set_sql_query(&if empty {
+                    format!("SELECT * FROM ({sql}) q WHERE false")
+                } else {
+                    sql.clone()
+                })
+                .unwrap();
+            let reader = statement.execute().unwrap();
+            assert_eq!(reader.schema().fields().len(), 10);
+            let mut offset = 0;
+            for batch in reader {
+                let batch = batch.unwrap();
+                for row in 0..batch.num_rows() {
+                    let phase = (offset + row) % 3;
+                    for column in batch.columns() {
+                        assert_eq!(column.is_null(row), phase == 2);
+                    }
+                    if phase == 2 {
+                        continue;
+                    }
+                    assert_eq!(
+                        batch
+                            .column(0)
+                            .as_any()
+                            .downcast_ref::<StringArray>()
+                            .unwrap()
+                            .value(row),
+                        if phase == 0 { "こんにちは" } else { "" }
+                    );
+                    assert_eq!(
+                        batch
+                            .column(1)
+                            .as_any()
+                            .downcast_ref::<BinaryArray>()
+                            .unwrap()
+                            .value(row),
+                        if phase == 0 { &[0, 255][..] } else { &[] }
+                    );
+                    for column in 2..6 {
+                        assert_eq!(
+                            batch
+                                .column(column)
+                                .as_any()
+                                .downcast_ref::<Decimal128Array>()
+                                .unwrap()
+                                .value(row),
+                            if column == 5 {
+                                -12345678901234567890123456789012345678i128
+                            } else {
+                                -123
+                            }
+                        );
+                    }
+                    assert_eq!(
+                        batch
+                            .column(6)
+                            .as_any()
+                            .downcast_ref::<Date32Array>()
+                            .unwrap()
+                            .value(row),
+                        -1
+                    );
+                    assert_eq!(
+                        batch
+                            .column(7)
+                            .as_any()
+                            .downcast_ref::<Time64MicrosecondArray>()
+                            .unwrap()
+                            .value(row),
+                        43200123456
+                    );
+                    for column in [8, 9] {
+                        assert_eq!(
+                            batch
+                                .column(column)
+                                .as_any()
+                                .downcast_ref::<TimestampMicrosecondArray>()
+                                .unwrap()
+                                .value(row),
+                            -1
+                        );
+                    }
+                }
+                offset += batch.num_rows();
+            }
+            assert_eq!(offset, if empty { 0 } else { 2050 });
         }
     }
 }

@@ -1,0 +1,25 @@
+-- Copyright (c) 2026 ADBC Drivers Contributors
+--
+-- Licensed under the Apache License, Version 2.0 (the "License");
+-- you may not use this file except in compliance with the License.
+-- You may obtain a copy of the License at
+--
+--         http://www.apache.org/licenses/LICENSE-2.0
+--
+-- Unless required by applicable law or agreed to in writing, software
+-- distributed under the License is distributed on an "AS IS" BASIS,
+-- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+-- See the License for the specific language governing permissions and
+-- limitations under the License.
+
+SELECT CASE WHEN i % 3 = 2 THEN NULL WHEN i % 3 = 1 THEN '' ELSE 'こんにちは' END AS s,
+        CASE WHEN i % 3 = 2 THEN NULL WHEN i % 3 = 1 THEN from_hex('') ELSE from_hex('00ff') END AS b,
+        CASE WHEN i % 3 = 2 THEN NULL ELSE -1.23::DECIMAL(4,2) END AS d4,
+        CASE WHEN i % 3 = 2 THEN NULL ELSE -1.23::DECIMAL(9,2) END AS d9,
+        CASE WHEN i % 3 = 2 THEN NULL ELSE -1.23::DECIMAL(18,2) END AS d18,
+        CASE WHEN i % 3 = 2 THEN NULL ELSE -123456789012345678901234567890123456.78::DECIMAL(38,2) END AS d38,
+        CASE WHEN i % 3 = 2 THEN NULL ELSE DATE '1969-12-31' END AS dt,
+        CASE WHEN i % 3 = 2 THEN NULL ELSE TIME '12:00:00.123456' END AS tm,
+        CASE WHEN i % 3 = 2 THEN NULL ELSE TIMESTAMP '1969-12-31 23:59:59.999999' END AS ts,
+        CASE WHEN i % 3 = 2 THEN NULL ELSE TIMESTAMPTZ '1969-12-31 23:59:59.999999+00' END AS tz
+        FROM range(6) t(i) ORDER BY i
