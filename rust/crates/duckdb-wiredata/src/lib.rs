@@ -16,6 +16,7 @@
 
 pub mod chunk;
 pub mod decode;
+pub mod encode;
 pub mod logical_type;
 
 #[cfg(test)]

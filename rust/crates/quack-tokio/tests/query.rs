@@ -519,3 +519,42 @@ async fn cancellation_releases_session_only_on_success() {
         assert_eq!(server.ids().iter().filter(|id| **id == 12).count(), 1);
     }
 }
+
+#[tokio::test]
+async fn upload_failure_matrix() {
+    for mode in 0..6 {
+        let server = Server::new(move |request| match &request.body {
+            MessageBody::ConnectionRequest(_) => handshake(60),
+            MessageBody::PrepareRequest(p) => prepare(p.query_uuid, false),
+            MessageBody::SendDataRequest(_) => match mode {
+                0 => remote(false),
+                1 => remote(true),
+                2 => Reply::Close,
+                3 => Reply::Bytes(vec![0]),
+                4 => success(),
+                _ => Reply::Hang,
+            },
+            _ => success(),
+        })
+        .await;
+        let mut connection = server.connect().await;
+        let mut query = connection.execute(params(2)).await.unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_millis(100),
+            query.send_data(
+                SendDataRequest {
+                    stream_id: "upload".into(),
+                    chunk_count: 0,
+                    batch_index: None,
+                    total_batches: Some(0),
+                    payload: Default::default(),
+                },
+                vec![],
+            ),
+        )
+        .await;
+        assert!(result.is_err() || result.unwrap().is_err());
+        query.cancel().await.unwrap();
+        assert_eq!(connection.execute(params(3)).await.is_err(), mode != 0);
+    }
+}

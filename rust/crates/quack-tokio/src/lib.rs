@@ -242,6 +242,90 @@ pub struct Query {
     done: bool,
 }
 impl Query {
+    /// Send a segmented payload, retaining each buffer until HTTP consumes it.
+    /// A zero-chunk terminal request closes the upload before fetching the result.
+    pub async fn send_data(
+        &mut self,
+        data: quack_protocol::message::SendDataRequest,
+        payload: Vec<bytes::Bytes>,
+    ) -> Result<(), Error> {
+        self.core.state()?.check_query(&self.protocol)?;
+        let payload_len = payload
+            .iter()
+            .try_fold(0usize, |n, b| n.checked_add(b.len()))
+            .ok_or(state::Error("upload length overflow"))?;
+        if (data.chunk_count == 0) != (payload_len == 0) || !data.payload.as_bytes().is_empty() {
+            return Err(Box::new(state::Error("invalid segmented upload payload")));
+        }
+        let mut operation = Operation {
+            query: self,
+            armed: true,
+        };
+        let result: Result<(), Error> = async {
+            let request = operation.query.protocol.upload_request(data)?;
+            let prefix = bytes::Bytes::from(codec::encode_upload_header(&request)?);
+            let length = prefix
+                .len()
+                .checked_add(payload_len)
+                .ok_or(state::Error("upload length overflow"))?;
+            let segments = std::iter::once(prefix).chain(payload);
+            let body = reqwest::Body::wrap_stream(futures_util::stream::iter(
+                segments.map(Ok::<_, std::io::Error>),
+            ));
+
+            let response = tokio::time::timeout(REQUEST_TIMEOUT, async {
+                let response = operation
+                    .query
+                    .core
+                    .client
+                    .post(operation.query.core.endpoint.clone())
+                    .header(reqwest::header::CONTENT_TYPE, "application/vnd.duckdb")
+                    .header(reqwest::header::CONTENT_LENGTH, length)
+                    .body(body)
+                    .send()
+                    .await?
+                    .error_for_status()?;
+                response.bytes().await
+            })
+            .await??;
+            operation
+                .query
+                .core
+                .state()?
+                .check_query(&operation.query.protocol)?;
+            operation
+                .query
+                .protocol
+                .response(codec::decode(response)?)
+                .map_err(|error| -> Error {
+                    match error {
+                        state::QueryError::Remote(error) => Box::new(RemoteError(error)),
+                        error => Box::new(error),
+                    }
+                })
+        }
+        .await;
+        if result.is_err() {
+            if operation.query.protocol.is_complete() {
+                operation.query.finish()?;
+            } else {
+                operation.query.abandon();
+            }
+        }
+        operation.armed = false;
+        result
+    }
+
+    /// Supply known result metadata when PREPARE omitted it.
+    pub fn set_expected_result_schema(
+        &mut self,
+        types: Vec<LogicalType>,
+        names: Vec<WireString>,
+    ) -> Result<(), Error> {
+        self.protocol.set_expected_result_schema(types, names)?;
+        Ok(())
+    }
+
     pub fn result_types(&self) -> &[LogicalType] {
         self.protocol.result_types()
     }

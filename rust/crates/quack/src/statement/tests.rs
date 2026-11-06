@@ -645,3 +645,84 @@ fn live_execute_update() {
         assert_eq!(statement.execute_update().unwrap(), None);
     }
 }
+
+#[test]
+fn live_ingest_empty_and_reader_failure() {
+    use adbc_core::options::OptionStatement;
+    use arrow_schema::{Field, Schema};
+    let Some(database) = database() else {
+        return;
+    };
+    let mut connection = database.new_connection().unwrap();
+    let mut statement = connection.new_statement().unwrap();
+    let name = format!("ingest_{}", uuid::Uuid::new_v4().simple());
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        arrow_schema::DataType::Int32,
+        false,
+    )]));
+    statement
+        .set_option(
+            OptionStatement::TargetTable,
+            OptionValue::String(name.clone()),
+        )
+        .unwrap();
+    statement
+        .bind_stream(Box::new(arrow_array::RecordBatchIterator::new(
+            Vec::<std::result::Result<RecordBatch, ArrowError>>::new(),
+            schema.clone(),
+        )))
+        .unwrap();
+    assert_eq!(statement.execute_update().unwrap(), None);
+    statement
+        .set_option(
+            OptionStatement::IngestMode,
+            adbc_core::options::IngestMode::Append.into(),
+        )
+        .unwrap();
+    statement
+        .bind_stream(Box::new(arrow_array::RecordBatchIterator::new(
+            vec![Err(ArrowError::ComputeError("input failure".into()))],
+            schema.clone(),
+        )))
+        .unwrap();
+    assert_eq!(
+        statement.execute_update().unwrap_err().status,
+        Status::InvalidData
+    );
+    statement
+        .bind(RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![42]))]).unwrap())
+        .unwrap();
+    statement.execute_update().unwrap();
+    let nullable_schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        arrow_schema::DataType::Int32,
+        true,
+    )]));
+    statement
+        .bind(
+            RecordBatch::try_new(
+                nullable_schema,
+                vec![Arc::new(Int32Array::from(vec![None]))],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        statement.execute_update().unwrap_err().status,
+        Status::Integrity
+    );
+    statement
+        .set_sql_query(format!("SELECT value FROM {name}"))
+        .unwrap();
+    let batches = statement
+        .execute()
+        .unwrap()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+    statement
+        .set_sql_query(format!("DROP TABLE {name}"))
+        .unwrap();
+    statement.execute_update().unwrap();
+}

@@ -354,3 +354,68 @@ fn zero_uuid_is_rejected_without_claiming_connection() {
     assert!(connection.prepare(params(0)).is_err());
     assert!(connection.prepare(params(1)).is_ok());
 }
+
+#[test]
+fn upload_indices_and_terminal_count_are_checked() {
+    let mut connection = connected();
+    let mut query = connection.prepare(params(1)).unwrap();
+    query.request().unwrap();
+    query.response(prepare(1, false, true)).unwrap();
+    let data = |index: Option<u64>, total: Option<u64>| SendDataRequest {
+        stream_id: "upload".into(),
+        chunk_count: u64::from(index.is_some()),
+        batch_index: index,
+        total_batches: total,
+        payload: Default::default(),
+    };
+    assert!(query.upload_request(data(Some(0), None)).is_err());
+    query.upload_request(data(Some(1), None)).unwrap();
+    assert!(query.upload_request(data(Some(1), None)).is_err());
+    query
+        .response(Message {
+            header: Header::default(),
+            body: MessageBody::SendDataResponse(SendDataResponse::default()),
+        })
+        .unwrap();
+    assert!(query.upload_request(data(None, Some(2))).is_err());
+    query.upload_request(data(None, Some(1))).unwrap();
+    assert!(query.upload_request(data(Some(2), None)).is_err());
+}
+
+#[test]
+fn upload_does_not_invent_result_metadata() {
+    let mut connection = connected();
+    let mut query = connection.prepare(params(1)).unwrap();
+    query.request().unwrap();
+    query.response(prepare(1, false, true)).unwrap();
+    query.result_types.clear();
+    query.result_names.clear();
+    query
+        .upload_request(SendDataRequest {
+            stream_id: "upload".into(),
+            chunk_count: 0,
+            batch_index: None,
+            total_batches: Some(0),
+            payload: Default::default(),
+        })
+        .unwrap();
+    assert!(query.result_types().is_empty());
+    query
+        .response(response(MessageBody::SendDataResponse(
+            SendDataResponse::default(),
+        )))
+        .unwrap();
+    let types = vec![duckdb_wiredata::logical_type::LogicalType {
+        id: duckdb_wiredata::logical_type::LogicalTypeId::BigInt,
+        info: None,
+    }];
+    query
+        .set_expected_result_schema(types.clone(), vec!["Count".into()])
+        .unwrap();
+    assert_eq!(query.result_types(), types);
+    assert!(
+        query
+            .set_expected_result_schema(types, vec!["Other".into()])
+            .is_err()
+    );
+}
