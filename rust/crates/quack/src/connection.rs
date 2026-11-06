@@ -74,16 +74,25 @@ impl Connection for QuackConnection {
 
     fn get_objects(
         &self,
-        _depth: ObjectDepth,
-        _catalog: Option<&str>,
-        _db_schema: Option<&str>,
-        _table_name: Option<&str>,
-        _table_type: Option<Vec<&str>>,
-        _column_name: Option<&str>,
+        depth: ObjectDepth,
+        catalog: Option<&str>,
+        db_schema: Option<&str>,
+        table_name: Option<&str>,
+        table_type: Option<Vec<&str>>,
+        column_name: Option<&str>,
     ) -> Result<Box<dyn RecordBatchReader + Send>> {
-        Err(ErrorHelper::not_implemented()
-            .message("get_objects not implemented")
-            .to_adbc())
+        Ok(driverbase::get_objects::get_objects(
+            crate::objects::Objects(
+                std::sync::Arc::clone(&self.session),
+                column_name.map(str::to_owned),
+            ),
+            depth,
+            catalog,
+            db_schema,
+            table_name,
+            table_type,
+            column_name,
+        ))
     }
 
     fn get_table_schema(
