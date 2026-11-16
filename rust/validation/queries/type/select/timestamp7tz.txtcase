@@ -16,7 +16,7 @@
 
 [tags]
 sql-type-name = "TIMESTAMPTZ"
-field-type-name = "TIMESTAMPTZ"
+field-type-name = {}
 caveats = ["DuckDB returns TIMESTAMPTZ values at microsecond precision; additional fractional digits are discarded. See https://duckdb.org/docs/current/sql/data_types/timestamp."]
 partial-support = true
 

@@ -14,11 +14,9 @@
 
 // part: metadata
 
-skip = "Rust driver does not yet decode second, millisecond, or nanosecond timestamps"
-
 [tags]
 sql-type-name = "TIMESTAMP_NS"
-field-type-name = "TIMESTAMP_NS"
+field-type-name = {}
 caveats = ["DuckDB reserves the extreme nanosecond values and cannot parse the full Arrow timestamp range; this case uses nearby finite values. See https://duckdb.org/docs/current/sql/data_types/timestamp#special-values."]
 partial-support = true
 

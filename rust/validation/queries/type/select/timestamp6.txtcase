@@ -16,7 +16,7 @@
 
 [tags]
 sql-type-name = "TIMESTAMP"
-field-type-name = "TIMESTAMP"
+field-type-name = {}
 
 // part: setup_query
 

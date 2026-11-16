@@ -15,6 +15,7 @@
 // part: metadata
 
 [tags]
+sql-type-name = "TIMESTAMPTZ"
 caveats = ["DuckDB normalizes TIMESTAMPTZ values to microsecond precision on readback."]
 
 // part: expected_schema
