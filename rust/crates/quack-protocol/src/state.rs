@@ -218,6 +218,7 @@ enum QueryState {
     ReadyAck,
     AwaitingAck,
     AwaitingCancel,
+    ReadyCancel,
     AwaitingUpload { delivering: bool },
     Complete,
     Released,
@@ -320,7 +321,10 @@ impl Query {
     /// Cancel this execution and discard buffered results.
     pub fn cancel_request(&mut self) -> Result<Message, Error> {
         match self.state {
-            QueryState::Delivering | QueryState::ReadyFetch | QueryState::ReadyAck => {}
+            QueryState::Delivering
+            | QueryState::ReadyFetch
+            | QueryState::ReadyAck
+            | QueryState::ReadyCancel => {}
             _ => return Err(Error("query cannot be cancelled in its current state")),
         }
         self.pending.clear();
@@ -452,7 +456,17 @@ impl Query {
                 Ok(())
             }
             (QueryState::AwaitingFetch { index }, MessageBody::FetchResponse(body)) => {
-                let chunks = body.decode_chunks()?;
+                let chunks = match body.decode_chunks() {
+                    Ok(chunks) => chunks,
+                    Err(error) => {
+                        if error.kind == duckdb_wiredata::decode::DecodeErrorKind::Unsupported
+                            && error.result_data
+                        {
+                            self.state = QueryState::ReadyCancel;
+                        }
+                        return Err(QueryError::Decode(error));
+                    }
+                };
                 if body.chunk_count == 0 {
                     if body.batch_index.is_some()
                         || body
@@ -501,6 +515,18 @@ impl Query {
         } else {
             QueryState::Complete
         };
+        Ok(())
+    }
+
+    pub fn recover_unsupported(&mut self) -> Result<(), Error> {
+        match self.state {
+            QueryState::AwaitingPrepare
+            | QueryState::AwaitingFetch { .. }
+            | QueryState::ReadyCancel => {}
+            _ => return Err(Error("query cannot recover in its current state")),
+        }
+        self.pending.clear();
+        self.state = QueryState::ReadyCancel;
         Ok(())
     }
 

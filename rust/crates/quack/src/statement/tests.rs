@@ -65,6 +65,7 @@ fn query_error_categories_and_details() {
     assert_eq!(
         query_error(&DecodeError {
             kind: DecodeErrorKind::Unsupported,
+            result_data: true,
             offset: 1,
             context: "type",
             message: "unsupported".into()

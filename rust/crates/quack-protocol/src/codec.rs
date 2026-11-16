@@ -22,6 +22,7 @@ const END: u16 = u16::MAX;
 #[derive(Debug, PartialEq, Eq)]
 pub struct DecodeError {
     pub kind: DecodeErrorKind,
+    pub result_data: bool,
     pub offset: usize,
     pub context: &'static str,
     pub message: String,
@@ -85,6 +86,7 @@ impl<'a> Reader<'a> {
     fn error(&self, message: impl Into<String>) -> DecodeError {
         DecodeError {
             kind: DecodeErrorKind::Malformed,
+            result_data: false,
             offset: self.pos,
             context: self.context,
             message: message.into(),
@@ -222,6 +224,7 @@ impl<'a> Reader<'a> {
             let (value, consumed) = duckdb_wiredata::decode::logical_type(&self.bytes[self.pos..])
                 .map_err(|error| DecodeError {
                     kind: error.kind,
+                    result_data: true,
                     offset: self.pos + error.offset,
                     context: error.context,
                     message: error.message,
@@ -326,6 +329,7 @@ pub(crate) fn decode_prepare_body(bytes: &Bytes) -> Result<PrepareResponseParts,
 fn chunk_error(error: duckdb_wiredata::decode::DecodeError, start: usize) -> DecodeError {
     DecodeError {
         kind: error.kind,
+        result_data: true,
         offset: start + error.offset,
         context: error.context,
         message: error.message,
@@ -340,6 +344,7 @@ pub fn validate_chunk_schema(
     if chunk.types() != types {
         return Err(DecodeError {
             kind: DecodeErrorKind::Malformed,
+            result_data: false,
             offset: 0,
             context: "result schema",
             message: format!(
@@ -655,6 +660,7 @@ pub fn decode(input: impl Into<Bytes>) -> Result<Message, DecodeError> {
         _ => {
             return Err(DecodeError {
                 kind: DecodeErrorKind::Unsupported,
+                result_data: false,
                 offset: 2,
                 context: "header.type",
                 message: format!("unsupported message ID {id}"),
