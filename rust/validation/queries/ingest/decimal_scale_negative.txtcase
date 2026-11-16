@@ -14,6 +14,7 @@
 
 // part: metadata
 [tags]
+sql-type-name = "DECIMAL"
 caveats = ["Negative decimal scales are represented as a wider decimal with scale zero."]
 
 // part: expected_schema

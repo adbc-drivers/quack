@@ -14,11 +14,9 @@
 
 // part: metadata
 
-skip = "Rust driver does not yet decode second, millisecond, or nanosecond timestamps"
-
 [tags]
 sql-type-name = "TIMESTAMP_NS"
-field-type-name = "TIMESTAMP_NS"
+field-type-name = {}
 
 // part: setup_query
 
