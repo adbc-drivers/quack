@@ -413,11 +413,31 @@ impl Query {
                     }
                 }
             }
-            Err(error) => {
-                self.protocol.fail();
-                Err(error)
-            }
+            Err(error) => Err(error),
         };
+        if let Err(error) = &result {
+            let decode = error.downcast_ref::<codec::DecodeError>().or_else(|| {
+                match error.downcast_ref::<state::QueryError>() {
+                    Some(state::QueryError::Decode(error)) => Some(error),
+                    _ => None,
+                }
+            });
+            if decode.is_some_and(|error| {
+                error.result_data
+                    && error.kind == duckdb_wiredata::decode::DecodeErrorKind::Unsupported
+            }) && self.protocol.recover_unsupported().is_ok()
+            {
+                let mut operation = Operation {
+                    query: self,
+                    armed: true,
+                };
+                if operation.query.cancel_inner().await.is_err() {
+                    operation.query.abandon();
+                }
+                operation.armed = false;
+                return result;
+            }
+        }
         if cleanup || result.is_err() || self.protocol.is_complete() {
             // A failed ACK affects session health, but not successful result consumption.
             self.finish()?;

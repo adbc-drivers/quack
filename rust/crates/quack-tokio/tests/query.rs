@@ -558,3 +558,62 @@ async fn upload_failure_matrix() {
         assert_eq!(connection.execute(params(3)).await.is_err(), mode != 0);
     }
 }
+
+#[tokio::test]
+async fn unsupported_results_cancel_before_session_reuse() {
+    for inline in [false, true] {
+        for fail in [false, true] {
+            let server = Server::new(move |request| match &request.body {
+                MessageBody::ConnectionRequest(_) => handshake(60),
+                MessageBody::PrepareRequest(p) if p.query_uuid == params(1).uuid && inline => {
+                    let Reply::Message(response) = prepare(p.query_uuid, true) else {
+                        unreachable!()
+                    };
+                    let mut bytes = codec::encode(&response).unwrap().into_vec();
+                    let position = bytes
+                        .windows(5)
+                        .rposition(|w| w == [100, 0, 13, 255, 255])
+                        .unwrap();
+                    bytes[position + 2] = 50;
+                    Reply::Bytes(bytes)
+                }
+                MessageBody::PrepareRequest(p) => {
+                    prepare(p.query_uuid, p.query_uuid != params(1).uuid)
+                }
+                MessageBody::FetchRequest(_) => {
+                    let Reply::Message(response) = data() else {
+                        unreachable!()
+                    };
+                    let mut bytes = codec::encode(&response).unwrap().into_vec();
+                    let position = bytes
+                        .windows(5)
+                        .rposition(|w| w == [100, 0, 13, 255, 255])
+                        .unwrap();
+                    bytes[position + 2] = 50;
+                    Reply::Bytes(bytes)
+                }
+                MessageBody::CancelRequest(c) => {
+                    assert_eq!(c.query_uuid, params(1).uuid);
+                    if fail { remote(false) } else { success() }
+                }
+                _ => success(),
+            })
+            .await;
+            let mut connection = server.connect().await;
+            match connection.execute(params(1)).await {
+                Err(_) => assert!(inline),
+                Ok(mut query) => {
+                    assert!(!inline);
+                    assert!(query.next_chunk().await.is_err());
+                    assert!(query.next_chunk().await.unwrap().is_none());
+                }
+            }
+            assert_eq!(server.ids().iter().filter(|id| **id == 12).count(), 1);
+            let next = connection.execute(params(2)).await;
+            assert_eq!(next.is_err(), fail);
+            if let Ok(mut query) = next {
+                while query.next_chunk().await.unwrap().is_some() {}
+            }
+        }
+    }
+}
