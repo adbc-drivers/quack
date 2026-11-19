@@ -27,6 +27,7 @@ arrow-cast = "60"
 adbc_core = "0.25"
 adbc_ffi = "0.25"
 arrow-array = { version = "60", features = ["ffi"] }
+arrow-select = "60"
 arrow-buffer = "60"
 arrow-schema = "60"
 duckdb-wiredata = { path = "../duckdb-wiredata" }

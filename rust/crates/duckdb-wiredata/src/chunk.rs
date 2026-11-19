@@ -52,6 +52,12 @@ pub struct Vector {
 
 #[derive(Debug, PartialEq, Eq)]
 enum Storage {
+    Shredded(Box<Vector>),
+    Nested {
+        children: Vec<Vector>,
+        entries: Vec<(usize, usize)>,
+        validity: Option<Bytes>,
+    },
     Variable {
         values: Vec<Bytes>,
         validity: Option<Bytes>,
@@ -74,6 +80,12 @@ enum Storage {
 /// Borrowed encoding information; all byte buffers are validated shared views.
 #[derive(Debug)]
 pub enum VectorEncoding<'a> {
+    Shredded(&'a Vector),
+    Nested {
+        children: &'a [Vector],
+        entries: &'a [(usize, usize)],
+        validity: Option<&'a Bytes>,
+    },
     Variable {
         values: &'a [Bytes],
         validity: Option<&'a Bytes>,
@@ -104,6 +116,16 @@ impl Vector {
     }
     pub fn encoding(&self) -> VectorEncoding<'_> {
         match &self.storage {
+            Storage::Shredded(value) => VectorEncoding::Shredded(value),
+            Storage::Nested {
+                children,
+                entries,
+                validity,
+            } => VectorEncoding::Nested {
+                children,
+                entries,
+                validity: validity.as_ref(),
+            },
             Storage::Variable { values, validity } => VectorEncoding::Variable {
                 values,
                 validity: validity.as_ref(),
@@ -146,6 +168,16 @@ impl Vector {
     /// Read a compatible native storage value without logical-type coercion.
     pub fn get_physical<T: Primitive>(&self, index: usize) -> Option<Option<T>> {
         let compatible = match self.logical_type {
+            LogicalTypeId::Enum => matches!(
+                (enum_width(&self.descriptor), T::LOGICAL_TYPE),
+                (Some(1), LogicalTypeId::UTinyInt)
+                    | (Some(2), LogicalTypeId::USmallInt)
+                    | (Some(4), LogicalTypeId::UInteger)
+            ),
+            LogicalTypeId::UHugeInt | LogicalTypeId::Uuid | LogicalTypeId::Interval => {
+                T::LOGICAL_TYPE == LogicalTypeId::HugeInt
+            }
+            LogicalTypeId::TimeTz => T::LOGICAL_TYPE == LogicalTypeId::UBigInt,
             LogicalTypeId::Date => T::LOGICAL_TYPE == LogicalTypeId::Integer,
             LogicalTypeId::TimeNs
             | LogicalTypeId::TimestampTzNs
@@ -168,7 +200,7 @@ impl Vector {
             return None;
         }
         match &self.storage {
-            Storage::Variable { .. } => None,
+            Storage::Shredded(_) | Storage::Nested { .. } | Storage::Variable { .. } => None,
             Storage::Flat { values, validity } => {
                 if validity
                     .as_ref()
@@ -307,9 +339,35 @@ fn decimal_width(logical_type: &LogicalType) -> Option<usize> {
     }
 }
 
+fn enum_width(descriptor: &LogicalType) -> Option<usize> {
+    if descriptor.id != LogicalTypeId::Enum {
+        return None;
+    }
+    match &descriptor.info.as_ref()?.kind {
+        TypeInfoKind::Enum { values } => Some(match values.len() {
+            0..=255 => 1,
+            256..=65535 => 2,
+            _ => 4,
+        }),
+        _ => None,
+    }
+}
+
+fn variable_width(id: LogicalTypeId) -> bool {
+    matches!(
+        id,
+        LogicalTypeId::Char | LogicalTypeId::Varchar | LogicalTypeId::Bit | LogicalTypeId::Blob
+    )
+}
+
 fn physical_width(id: LogicalTypeId) -> Option<usize> {
     match id {
-        LogicalTypeId::Date => Some(4),
+        LogicalTypeId::HugeInt
+        | LogicalTypeId::UHugeInt
+        | LogicalTypeId::Uuid
+        | LogicalTypeId::Interval => Some(16),
+        LogicalTypeId::TimeTz => Some(8),
+        LogicalTypeId::SqlNull | LogicalTypeId::Date => Some(4),
         LogicalTypeId::TimeNs
         | LogicalTypeId::TimestampTzNs
         | LogicalTypeId::Time
@@ -387,8 +445,17 @@ impl Parser<'_> {
             }
             if physical_width(logical_type.id).is_none()
                 && decimal_width(&logical_type).is_none()
-                && logical_type.id != LogicalTypeId::Varchar
-                && logical_type.id != LogicalTypeId::Blob
+                && !variable_width(logical_type.id)
+                && !matches!(
+                    logical_type.id,
+                    LogicalTypeId::Struct
+                        | LogicalTypeId::Variant
+                        | LogicalTypeId::Union
+                        | LogicalTypeId::List
+                        | LogicalTypeId::Map
+                        | LogicalTypeId::Array
+                        | LogicalTypeId::Enum
+                )
             {
                 return Err(self.reader.unsupported(format!(
                     "unsupported chunk logical type {:?}",
@@ -523,7 +590,82 @@ impl Parser<'_> {
                 } else {
                     None
                 };
-                if logical_type == LogicalTypeId::Varchar || logical_type == LogicalTypeId::Blob {
+                if matches!(
+                    logical_type,
+                    LogicalTypeId::Struct
+                        | LogicalTypeId::Variant
+                        | LogicalTypeId::Union
+                        | LogicalTypeId::List
+                        | LogicalTypeId::Map
+                        | LogicalTypeId::Array
+                ) {
+                    let mut children = Vec::new();
+                    let mut entries = Vec::new();
+                    match descriptor.info.as_ref().map(|i| &i.kind) {
+                        Some(TypeInfoKind::Struct { children: fields }) => {
+                            self.reader.field(103, "Vector.children", true)?;
+                            if self.reader.count(2)? != fields.len() {
+                                return Err(self.reader.error("struct child count mismatch"));
+                            }
+                            for (_, f) in fields {
+                                children.push(self.vector(len, depth + 1, f)?);
+                                self.reader.end()?;
+                            }
+                        }
+                        Some(TypeInfoKind::Array { child, size }) => {
+                            self.reader.field(103, "Vector.array_size", true)?;
+                            if self.reader.uint(64)? != u64::from(*size) {
+                                return Err(self.reader.error("array size mismatch"));
+                            }
+                            self.reader.field(104, "Vector.child", true)?;
+                            children.push(
+                                self.vector(
+                                    len.checked_mul(*size as usize).ok_or_else(|| {
+                                        self.reader.error("array length overflow")
+                                    })?,
+                                    depth + 1,
+                                    child,
+                                )?,
+                            );
+                            self.reader.end()?;
+                        }
+                        Some(TypeInfoKind::List { child }) => {
+                            self.reader.field(104, "Vector.list_size", true)?;
+                            let count = usize::try_from(self.reader.uint(64)?)
+                                .map_err(|_| self.reader.error("list size overflow"))?;
+                            self.reader.field(105, "Vector.entries", true)?;
+                            if self.reader.count(2)? != len {
+                                return Err(self.reader.error("list entry count mismatch"));
+                            }
+                            for _ in 0..len {
+                                self.reader.field(100, "ListEntry.offset", true)?;
+                                let offset = self.reader.uint(64)?;
+                                self.reader.field(101, "ListEntry.length", true)?;
+                                let length = self.reader.uint(64)?;
+                                if offset > count as u64 || length > count as u64 - offset {
+                                    return Err(self.reader.error("list entry out of bounds"));
+                                }
+                                entries.push((offset as usize, length as usize));
+                                self.reader.end()?;
+                            }
+                            self.reader.field(106, "Vector.child", true)?;
+                            children.push(self.vector(count, depth + 1, child)?);
+                            self.reader.end()?;
+                        }
+                        _ => return Err(self.reader.error("invalid nested descriptor")),
+                    }
+                    return Ok(Vector {
+                        len,
+                        logical_type,
+                        descriptor: descriptor.clone(),
+                        storage: Storage::Nested {
+                            children,
+                            entries,
+                            validity,
+                        },
+                    });
+                }
+                if variable_width(logical_type) {
                     let values = self.strings(len, validity.as_ref())?;
                     return Ok(Vector {
                         len,
@@ -535,7 +677,8 @@ impl Parser<'_> {
                 self.reader.field(102, "Vector.values", true)?;
                 let size = len
                     .checked_mul(
-                        physical_width(logical_type)
+                        enum_width(descriptor)
+                            .or_else(|| physical_width(logical_type))
                             .or_else(|| decimal_width(descriptor))
                             .ok_or_else(|| self.reader.unsupported("unsupported primitive type"))?,
                     )
@@ -552,6 +695,19 @@ impl Parser<'_> {
                     }
                 }
                 Storage::Flat { values, validity }
+            }
+            5 if logical_type == LogicalTypeId::Variant => {
+                self.reader.field(91, "Vector.shredded_type", true)?;
+                let ty = self.reader.logical_type(depth + 1)?;
+                if ty.id != LogicalTypeId::Struct
+                    || !matches!(ty.info.as_ref().map(|i|&i.kind),Some(TypeInfoKind::Struct{children}) if children.len()==2)
+                {
+                    return Err(self.reader.error("invalid shredded VARIANT layout"));
+                }
+                self.reader.field(92, "Vector.shredded_data", true)?;
+                let child = self.vector(len, depth + 1, &ty)?;
+                self.reader.end()?;
+                Storage::Shredded(Box::new(child))
             }
             2 => Storage::Constant(Box::new(self.vector(1, depth + 1, descriptor)?)),
             3 => {
