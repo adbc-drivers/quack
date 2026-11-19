@@ -427,7 +427,7 @@ fn live_remote_error_and_unsupported_schema() {
     let mut reader = statement.execute().unwrap();
     assert!(reader.next().unwrap().is_ok());
     assert!(reader.next().is_none());
-    statement.set_sql_query("SELECT INTERVAL '1 day'").unwrap();
+    statement.set_sql_query("SELECT 1::BIGNUM").unwrap();
     assert_eq!(
         statement.execute().err().unwrap().status,
         Status::NotImplemented

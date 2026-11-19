@@ -248,7 +248,7 @@ fn unsupported_is_distinct() {
         .windows(5)
         .position(|v| v == [100, 0, 13, 255, 255])
         .unwrap();
-    wire[index + 2] = 27;
+    wire[index + 2] = 39;
     assert_eq!(decode(wire).unwrap_err().kind, DecodeErrorKind::Unsupported);
 }
 

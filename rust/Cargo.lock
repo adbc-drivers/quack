@@ -1071,6 +1071,7 @@ dependencies = [
  "arrow-buffer",
  "arrow-cast",
  "arrow-schema",
+ "arrow-select",
  "bytes",
  "driverbase",
  "duckdb-wiredata",

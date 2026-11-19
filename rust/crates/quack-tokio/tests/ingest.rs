@@ -41,7 +41,7 @@ async fn segmented_upload_empty_stream_and_cancellation() -> Result<(), Error> {
     for run in 0..3 {
         let stream = format!("test_upload_{run}");
         let mut query = connection.execute(state::QueryParams {
-            query: format!("SELECT count(*) FROM scan_data_from_quack_client('{stream}', NULL::STRUCT(value INTEGER), ordered := true)").into(),
+            query: format!("SELECT count(*) AS Count FROM scan_data_from_quack_client('{stream}', NULL::STRUCT(value INTEGER), ordered := true)").into(),
             uuid: HugeInt { upper: 0, lower: run + 1 }, inline_rows: Some(0),
         }).await?;
         query.set_expected_result_schema(

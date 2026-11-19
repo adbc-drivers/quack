@@ -14,6 +14,7 @@
 
 import adbc_driver_manager.dbapi
 import adbc_drivers_validation.tests.statement as statement_tests
+import pyarrow as pa
 import pytest
 
 from .quack import get_quirks
@@ -25,26 +26,33 @@ def pytest_generate_tests(metafunc) -> None:
 
 
 class TestStatement(statement_tests.TestStatement):
-    @pytest.mark.parametrize(
-        "sql_query",
-        [
-            pytest.param("SELECT [1, 2, 3]", id="list"),
-            pytest.param("SELECT {'a': 1}", id="struct"),
-            pytest.param("SELECT MAP([1], [2])", id="map"),
-            pytest.param("SELECT 1::HUGEINT", id="hugeint"),
-            pytest.param("SELECT 1::UHUGEINT", id="uhugeint"),
-            pytest.param(
-                "SELECT '550e8400-e29b-41d4-a716-446655440000'::UUID", id="uuid"
-            ),
-            pytest.param("SELECT INTERVAL '1 day'", id="interval"),
-            pytest.param("SELECT TIMETZ '12:00:00+00'", id="timetz"),
-            pytest.param("SELECT 'a'::ENUM('a', 'b')", id="enum"),
-            pytest.param("SELECT '101'::BIT", id="bit"),
-        ],
-    )
-    def test_unsupported_result_preserves_connection(self, conn, sql_query):
+    def test_unsupported_result_preserves_connection(self, conn):
         with conn.cursor() as cursor:
             with pytest.raises(adbc_driver_manager.dbapi.NotSupportedError):
-                cursor.execute(sql_query)
+                cursor.execute("SELECT 1::BIGNUM")
             cursor.execute("SELECT 1")
             assert cursor.fetchall() == [(1,)]
+
+    @pytest.mark.parametrize(
+        ("count", "index_type"),
+        [
+            (255, pa.uint8()),
+            (256, pa.uint16()),
+            (65535, pa.uint16()),
+            (65536, pa.uint32()),
+        ],
+    )
+    def test_enum_width(self, conn, count, index_type):
+        name = f"quack_enum_{count}"
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"CREATE TYPE {name} AS ENUM (SELECT i::VARCHAR FROM range({count}) t(i) ORDER BY i)"
+            )
+            try:
+                cursor.execute(f"SELECT '{count - 1}'::{name} AS res")
+                result = cursor.fetch_arrow_table().column(0).chunk(0)
+                assert result.type == pa.dictionary(index_type, pa.string())
+                assert result.indices.to_pylist() == [count - 1]
+                assert result.dictionary[count - 1].as_py() == str(count - 1)
+            finally:
+                cursor.execute(f"DROP TYPE {name}")

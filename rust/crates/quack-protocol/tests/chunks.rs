@@ -170,7 +170,7 @@ fn malformed_inline_wrappers_and_schema_fail() {
     let chunk_type = pointer + 3 + 6;
     assert_eq!(&wire[chunk_type..chunk_type + 3], &[100, 0, 13]);
     let mut unsupported = wire.clone();
-    unsupported[chunk_type + 2] = 27;
+    unsupported[chunk_type + 2] = 39;
     let error = codec::decode(unsupported).unwrap_err();
     assert_eq!(error.kind, DecodeErrorKind::Unsupported);
 

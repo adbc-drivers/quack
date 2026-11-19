@@ -255,13 +255,13 @@ fn schema_validation_and_mismatch_are_errors() {
         id: LogicalTypeId::Integer,
         info: None,
     };
-    let varchar = LogicalType {
-        id: LogicalTypeId::Interval,
+    let bignum = LogicalType {
+        id: LogicalTypeId::BigNum,
         info: None,
     };
     assert!(schema(std::slice::from_ref(&integer), &[]).is_err());
     assert!(matches!(
-        schema(&[varchar], &["a".into()]),
+        schema(&[bignum], &["a".into()]),
         Err(ArrowError::NotYetImplemented(_))
     ));
     assert!(schema(&[integer], &[WireString(vec![255])]).is_err());
@@ -485,4 +485,139 @@ fn scalar_arrow_validation() {
     )]));
     assert!(record_batch(chunk, wrong).is_err());
     assert_eq!(actual.field(0).data_type(), &DataType::Decimal128(10, 2));
+}
+
+#[test]
+fn hugeint_extremes_preserve_raw_decimal_payloads() {
+    let coefficients = [i128::MIN, -10i128.pow(38), 10i128.pow(38), i128::MAX];
+    let bytes: Vec<_> = coefficients.iter().flat_map(|v| v.to_le_bytes()).collect();
+    for id in [49, 50] {
+        let mut vector = field(100, [0]);
+        vector.extend(field(102, blob(&bytes)));
+        let (chunk, _) = decode(scalar_chunk(4, id, None, vector)).unwrap();
+        let schema = schema(chunk.types(), &["res".into()]).unwrap();
+        let result = record_batch(chunk, schema).unwrap();
+        let decimals = result
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::Decimal128Array>()
+            .unwrap();
+        assert_eq!(decimals.values().as_ref(), coefficients);
+    }
+}
+
+#[test]
+fn shredded_variant_merges_typed_fields_and_untyped_overlay() {
+    fn object(mut bytes: Vec<u8>) -> Vec<u8> {
+        bytes.extend([255, 255]);
+        bytes
+    }
+    fn primitive(id: u8) -> Vec<u8> {
+        object(field(100, [id]))
+    }
+    fn compound(id: u8, tag: u8, info: Vec<u8>) -> Vec<u8> {
+        object(
+            [
+                field(100, [id]),
+                field(101, [1]),
+                object([field(100, [tag]), info].concat()),
+            ]
+            .concat(),
+        )
+    }
+    fn list_type(child: Vec<u8>) -> Vec<u8> {
+        compound(101, 4, field(200, child))
+    }
+    fn struct_type(fields: Vec<(&str, Vec<u8>)>) -> Vec<u8> {
+        let mut children = uint(fields.len() as u64);
+        for (name, ty) in fields {
+            children.extend(object(
+                [field(0, blob(name.as_bytes())), field(1, ty)].concat(),
+            ))
+        }
+        compound(100, 5, field(200, children))
+    }
+    fn structure(children: Vec<Vec<u8>>) -> Vec<u8> {
+        let mut values = uint(children.len() as u64);
+        for child in children {
+            values.extend(object(child))
+        }
+        [field(100, [0]), field(103, values)].concat()
+    }
+    fn list(len: u8, child: Vec<u8>) -> Vec<u8> {
+        let entry = object([field(100, [0]), field(101, [len])].concat());
+        [
+            field(100, [0]),
+            field(104, [len]),
+            field(105, [vec![1], entry].concat()),
+            field(106, object(child)),
+        ]
+        .concat()
+    }
+
+    // The remainder holds {"z": true}. Its one-based root index is 1.
+    // The typed column contributes {"a": 42}.
+    let remainder_type = struct_type(vec![
+        ("keys", list_type(primitive(25))),
+        (
+            "children",
+            list_type(struct_type(vec![
+                ("keys_index", primitive(30)),
+                ("values_index", primitive(30)),
+            ])),
+        ),
+        (
+            "values",
+            list_type(struct_type(vec![
+                ("type_id", primitive(28)),
+                ("byte_offset", primitive(30)),
+            ])),
+        ),
+        ("data", primitive(26)),
+    ]);
+    let remainder = structure(vec![
+        list(1, strings(false, &[b"z"], None)),
+        list(1, structure(vec![flat(&[0], None), flat(&[1], None)])),
+        list(
+            2,
+            structure(vec![
+                [field(100, [0]), field(102, blob(&[29, 1]))].concat(),
+                flat(&[0, 2], None),
+            ]),
+        ),
+        strings(false, &[&[1, 0]], None),
+    ]);
+    let typed_type = struct_type(vec![
+        ("typed_value", struct_type(vec![("a", primitive(13))])),
+        ("untyped_value_index", primitive(30)),
+    ]);
+    let physical_type = struct_type(vec![
+        ("unshredded", remainder_type),
+        ("shredded", typed_type),
+    ]);
+    let typed = structure(vec![structure(vec![flat(&[42], None)]), flat(&[1], None)]);
+    let vector = [
+        field(90, [5]),
+        field(91, physical_type),
+        field(92, object(structure(vec![remainder, typed]))),
+    ]
+    .concat();
+    let (chunk, _) = decode(scalar_chunk(1, 109, None, vector)).unwrap();
+    let schema = schema(chunk.types(), &["res".into()]).unwrap();
+    let result = record_batch(chunk, schema).unwrap();
+    let variant = result
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::StructArray>()
+        .unwrap();
+    let bytes = |index| {
+        variant
+            .column(index)
+            .as_any()
+            .downcast_ref::<arrow_array::BinaryArray>()
+            .unwrap()
+            .value(0)
+    };
+    assert_eq!(bytes(0), &[1, 2, 0, 1, 2, b'a', b'z']);
+    assert_eq!(bytes(1), &[2, 2, 0, 1, 0, 5, 6, 20, 42, 0, 0, 0, 4]);
 }

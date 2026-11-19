@@ -574,7 +574,7 @@ async fn unsupported_results_cancel_before_session_reuse() {
                         .windows(5)
                         .rposition(|w| w == [100, 0, 13, 255, 255])
                         .unwrap();
-                    bytes[position + 2] = 50;
+                    bytes[position + 2] = 39;
                     Reply::Bytes(bytes)
                 }
                 MessageBody::PrepareRequest(p) => {
@@ -589,7 +589,7 @@ async fn unsupported_results_cancel_before_session_reuse() {
                         .windows(5)
                         .rposition(|w| w == [100, 0, 13, 255, 255])
                         .unwrap();
-                    bytes[position + 2] = 50;
+                    bytes[position + 2] = 39;
                     Reply::Bytes(bytes)
                 }
                 MessageBody::CancelRequest(c) => {
